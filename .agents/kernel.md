@@ -396,8 +396,8 @@ MTE, PAC, BTI, GCS or POE.
 ## Two builds: wasm64 and lowered
 
 `vmlinux` uses memory64 and table64. `kernel/build.sh lower` runs it
-through Binaryen (`wasm-opt -g --memory64-lowering --table64-lowering`,
-about 1 s) to make `vmlinux32.wasm`. Pointers stay i64 in the code and at
+through Binaryen (`wasm-opt -g -O3 --memory64-lowering --table64-lowering`,
+about 5 s) to make `vmlinux32.wasm`. Pointers stay i64 in the code and at
 the JS boundary, so imports, exports and JSPI are unchanged; only memory
 and table accesses are wrapped to i32, which is exact because RAM is below
 4 GiB. The runtime picks the memory type with `moduleIsMemory64()`, which

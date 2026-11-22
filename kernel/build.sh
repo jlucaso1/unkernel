@@ -412,7 +412,7 @@ lower_kernel() {
 	# In current Binaryen --table64-lowering is an alias of --memory64-lowering
 	# (which lowers both); giving both is harmless (identical output) and also
 	# covers releases where they were separate passes.
-	"$wasm_opt" "$k/vmlinux" -g --memory64-lowering --table64-lowering -o "$k/vmlinux32.wasm.tmp"
+	"$wasm_opt" "$k/vmlinux" -g -O3 --memory64-lowering --table64-lowering -o "$k/vmlinux32.wasm.tmp"
 	mv "$k/vmlinux32.wasm.tmp" "$k/vmlinux32.wasm"
 	echo "kernel (32-bit memory): $k/vmlinux32.wasm ($("$wasm_opt" --version))"
 }
