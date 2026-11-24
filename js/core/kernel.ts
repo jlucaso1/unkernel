@@ -239,6 +239,27 @@ export interface KernelConfig {
 	spawnSampler?: (init: SamplerInit) => SamplerHandle;
 }
 
+/** Whether the linker's "target_features" section lists `feature`; undefined in a module without the section. */
+function moduleFeature(module: WebAssembly.Module, feature: string): boolean | undefined {
+	const secs = WebAssembly.Module.customSections(module, "target_features");
+	if (!secs.length) return undefined;
+	const b = new Uint8Array(secs[0]!);
+	let p = 0;
+	const leb = () => {
+		let v = 0, s = 0, c;
+		do { c = b[p++]!; v |= (c & 0x7f) << s; s += 7; } while (c & 0x80);
+		return v;
+	};
+	for (let n = leb(); n > 0 && p < b.length; n--) {
+		const prefix = String.fromCharCode(b[p++]!);
+		const len = leb();
+		const name = textDecoder.decode(b.subarray(p, p + len));
+		p += len;
+		if (name === feature) return prefix !== "-";
+	}
+	return false;
+}
+
 /**
  * Does this kernel module import a 64-bit (memory64) memory?
  *
@@ -252,44 +273,17 @@ export interface KernelConfig {
  * boot() retries with the other memory type if instantiation fails.
  */
 export function moduleIsMemory64(module: WebAssembly.Module): boolean {
-	const secs = WebAssembly.Module.customSections(module, "target_features");
-	if (!secs.length) return true;
-	const b = new Uint8Array(secs[0]!);
-	let p = 0;
-	const leb = () => {
-		let v = 0, s = 0, c;
-		do { c = b[p++]!; v |= (c & 0x7f) << s; s += 7; } while (c & 0x80);
-		return v;
-	};
-	for (let n = leb(); n > 0 && p < b.length; n--) {
-		const prefix = String.fromCharCode(b[p++]!);
-		const len = leb();
-		const name = textDecoder.decode(b.subarray(p, p + len));
-		p += len;
-		if (name === "memory64") return prefix !== "-";
-	}
-	return false;
+	return moduleFeature(module, "memory64") ?? true;
 }
 
-/** Does this kernel module import a shared memory (--shared-memory, atomics)? */
-export function moduleIsSharedMemory(module: WebAssembly.Module): boolean {
-	const secs = WebAssembly.Module.customSections(module, "target_features");
-	if (!secs.length) return false;
-	const b = new Uint8Array(secs[0]!);
-	let p = 0;
-	const leb = () => {
-		let v = 0, s = 0, c;
-		do { c = b[p++]!; v |= (c & 0x7f) << s; s += 7; } while (c & 0x80);
-		return v;
-	};
-	for (let n = leb(); n > 0 && p < b.length; n--) {
-		const prefix = String.fromCharCode(b[p++]!);
-		const len = leb();
-		const name = textDecoder.decode(b.subarray(p, p + len));
-		p += len;
-		if (name === "atomics") return prefix !== "-";
-	}
-	return false;
+/**
+ * Does this kernel module import a shared memory? A guess from its wasm
+ * atomics, which --shared-memory needs and the UP kernel does without (a
+ * KW_ATOMICS=1 build has them on an unshared memory); boot() retries with
+ * the other sharing if instantiation fails.
+ */
+function moduleIsSharedMemory(module: WebAssembly.Module): boolean {
+	return moduleFeature(module, "atomics") ?? false;
 }
 
 /**
@@ -1210,7 +1204,7 @@ export class Kernel {
 		if (!memImport) throw new Error("vmlinux must import its memory");
 		const guessed = this.opts.memory64 === undefined && !restore;
 		this.memory64 = restore ? restore.memory64 : guessed ? moduleIsMemory64(module) : !!this.opts.memory64;
-		if (!restore) this.sharedMemory = moduleIsSharedMemory(module);
+		this.sharedMemory = moduleIsSharedMemory(module);
 		if (restore) {
 			// No fallback sizes: the kernel sized RAM from this memory at boot.
 			this.memory = Kernel.newMemory(restore.memory.byteLength / 65536, this.memory64, this.sharedMemory);
@@ -1227,10 +1221,10 @@ export class Kernel {
 
 		this.onStage("instantiate");
 		// The JS API does not show whether the memory import is shared (a
-		// kernel linked with --shared-memory): retry once with the other
-		// sharing when the engine says that is the mismatch; and, for a
-		// guessed memory type (a module without target_features), once with
-		// the other type.
+		// kernel linked with --shared-memory), so that is a guess
+		// (moduleIsSharedMemory): retry once with the other sharing when the
+		// engine says it was wrong; and, for a guessed memory type (a module
+		// without target_features), once with the other type.
 		let instance: WebAssembly.Instance | undefined;
 		let flippedShared = false, flippedType = !guessed;
 		while (!instance) {

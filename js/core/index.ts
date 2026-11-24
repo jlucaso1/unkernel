@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 // The universal part of the SDK, re-exported by both entries (node.ts, web.ts).
 
-export { IRQ_SYNC, Kernel, bundledBoot, moduleIsMemory64, moduleIsSharedMemory } from "./kernel.ts";
+export { IRQ_SYNC, Kernel, bundledBoot, moduleIsMemory64 } from "./kernel.ts";
 export type { BootStage, ExitKind, ExitResult, KernelConfig, KernelStats, MemoryStage, NetDevice } from "./kernel.ts";
 export { HOLD_CLOCK_LAG_MS, SNAPSHOT_COMMIT_TIMEOUT_MS, SnapshotCommitError, decodeSnapshot, encodeSnapshot, snapshotCpuMismatch, snapshotDeviceMismatch, snapshotDiskMismatch } from "./snapshot.ts";
 export type { DeviceKind, DeviceSnapshots, KernelSnapshot, SnapshotHoldDecision, SnapshotOptions } from "./snapshot.ts";
