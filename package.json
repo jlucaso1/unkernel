@@ -32,6 +32,7 @@
     "./unkernel.wasm": "./dist/unkernel.wasm",
     "./virgl.mjs": "./dist/virgl.mjs",
     "./virgl.wasm": "./dist/virgl.wasm",
+    "./kwvk-naga.wasm": "./dist/kwvk-naga.wasm",
     "./package.json": "./package.json"
   },
   "types": "./dist/node.d.mts",
@@ -41,7 +42,8 @@
   "files": [
     "dist",
     "LICENSE",
-    "LICENSE-MIT"
+    "LICENSE-MIT",
+    "THIRD-PARTY.md"
   ],
   "engines": {
     "node": ">=24"
@@ -49,18 +51,20 @@
   "scripts": {
     "build": "obuild",
     "typecheck": "tsc -p .",
-    "test": "pnpm typecheck && pnpm test:block && pnpm test:net && pnpm test:tty && pnpm test:http && pnpm test:9p && pnpm test:distro && pnpm test:gl-gpu",
+    "test": "pnpm typecheck && pnpm test:block && pnpm test:net && pnpm test:tty && pnpm test:http && pnpm test:ws && pnpm test:9p && pnpm test:distro && pnpm test:gl-gpu && pnpm test:vk",
     "test:block": "node --test test/block.test.ts",
     "test:net": "node --test test/net.test.ts",
     "test:tty": "node --test test/tty.test.ts",
     "test:9p": "node --test test/9p.test.ts",
     "test:http": "node --test test/http.test.ts",
+    "test:ws": "node --test test/ws.test.ts",
     "test:kpatch": "node --test test/kpatch.test.ts",
     "test:profile": "node --test test/profile.test.ts",
     "test:wasi": "node test/wasi-node.ts",
     "test:api": "node --test test/api.test.ts",
     "test:distro": "node --test test/distro.test.ts",
     "test:gl-gpu": "node --test test/gl-gpu.test.ts",
+    "test:vk": "node --test test/vk.test.ts",
     "unkernel": "node js/cli.ts",
     "dev": "pnpm -C web dev",
     "build:web": "pnpm -C web build",

@@ -9,7 +9,8 @@
 # /sbin/init.
 #
 #   1. devtmpfs, proc, sysfs and a tmpfs on /run;
-#   2. /data: the data disk (ext4 labelled kwdata), if the host attached one;
+#   2. /data: the data disk (ext4 labelled kwdata), if the host attached one,
+#      its file system grown to the device (kwbox growfs);
 #   3. the distro: the block device labelled kwroot (erofs or ext4), mounted
 #      read-only at /kw/distro; /usr/lib/kw-distro names it. None, one that
 #      does not mount or boot, or kw.root=base: the base shell (busybox
@@ -18,9 +19,9 @@
 #      else (no data disk, safe mode, kw.root=initramfs) a tmpfs at /kw/tmp;
 #   5. the root: overlay of /kw/layer (the kw tools and runtime, on top) and
 #      /kw/distro under that upper layer, checked (the merged /bin/sh runs,
-#      its init is executable), then pivot_root with this root at
-#      /run/kw-lower, /dev /proc /sys /run /data moved along and a tmpfs on
-#      /tmp.
+#      its init is executable and is not one from before kwbox), then
+#      pivot_root with this root at /run/kw-lower, /dev /proc /sys /run
+#      /data moved along and a tmpfs on /tmp.
 #
 # State of a distro on the data disk, in /data/distros/NAME/:
 #   upper, work          the overlay's upper and work directories
@@ -42,7 +43,7 @@
 export PATH=/bin
 umask 022
 msg=/run/kw-overlay.msg
-mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
+mount -t devtmpfs devtmpfs /dev
 mount -t proc -o nosuid,nodev,noexec proc /proc
 mount -t sysfs -o nosuid,nodev,noexec sysfs /sys
 mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run
@@ -80,9 +81,12 @@ esac
 # in $found, and which of the two in $ft. Not findfs or blkid: busybox tries
 # every format it knows, one of them (a RAID superblock) near the end of the
 # device, and on a distro image read over HTTP that is a request of its own.
+# Only kwblk's disks and their partitions (wd*): the host attaches no other
+# kind.
 bylabel() {
 	local b
-	for b in /sys/class/block/*; do
+	for b in /sys/class/block/wd*; do
+		[ -e "$b" ] || continue
 		b=/dev/${b##*/}
 		[ "$(dd if="$b" bs=8 skip=143 count=2 2>/dev/null | tr -d '\0')" = "$1" ] && { found=$b ft=ext4; return 0; }
 		[ "$(dd if="$b" bs=8 skip=136 count=2 2>/dev/null | tr -d '\0')" = "$1" ] && { found=$b ft=erofs; return 0; }
@@ -99,6 +103,9 @@ if bylabel kwdata; then
 	if mount -t ext4 -o $o "$d" /data; then
 		data=1
 		[ "$(stat -c %u:%g /data)" = 0:0 ] || chown 0:0 /data
+		# A disk the host made larger (the page's Disk size): the file system fills it.
+		g=$(/usr/bin/kwbox growfs "$d" /data 2>&1)
+		[ -z "$g" ] || say "kw-data: $g"
 		sysctl -q -w vm.dirty_expire_centisecs=100 vm.dirty_writeback_centisecs=100
 	else
 		say "kw-data: cannot mount $d (LABEL=kwdata) on /data"
@@ -112,13 +119,13 @@ for t in $ft erofs ext4; do
 	mount -t "$t" -o ro "$dev" /kw/distro 2>/dev/null && { fstype=$t; break; }
 done
 [ -n "$fstype" ] || base_shell "the distro image $dev (LABEL=kwroot) does not mount as erofs or ext4"
-name=$(head -n1 /kw/distro/usr/lib/kw-distro 2>/dev/null)
+IFS= read -r name 2>/dev/null < /kw/distro/usr/lib/kw-distro
 case $name in
 '' | *[!a-z0-9]*)
 	say "kw-overlay: the image has no valid /usr/lib/kw-distro ('$name'), so its changes cannot be kept"
 	name= ;;
 esac
-img=$(head -n1 /kw/distro/usr/lib/kw-image 2>/dev/null)
+IFS= read -r img 2>/dev/null < /kw/distro/usr/lib/kw-image
 
 # safe REASON: this boot on a tmpfs upper.
 safe() {
@@ -160,11 +167,18 @@ root() {
 	mount -t overlay overlay -o "lowerdir=/kw/layer:/kw/distro,upperdir=$1,workdir=$2,redirect_dir=off,index=off,xino=off,metacopy=off" /mnt
 }
 # Whether the merged root can boot: its /bin/sh runs (a broken shell or C
-# library shows up here) and its init (kw-init, else /sbin/init) is
-# executable. Sets $bad.
+# library shows up here), its init (kw-init, else /sbin/init) is
+# executable, and that init does not run /usr/bin/kwtty (an image, or an
+# inittab or kw-init in the upper layer, from before kwbox: this base has
+# no such file, so there would be no console shell and no kwtty serve).
+# Sets $bad.
 check() {
 	bad=
-	chroot /mnt /bin/sh -c '[ -x /usr/local/sbin/kw-init ] || [ -x /sbin/init ]' 2>/dev/null && return 0
+	if chroot /mnt /bin/sh -c '[ -x /usr/local/sbin/kw-init ] || [ -x /sbin/init ]' 2>/dev/null; then
+		grep -qs '^[^#]*/usr/bin/kwtty' /mnt/usr/local/sbin/kw-init /mnt/etc/inittab || return 0
+		bad="its init runs /usr/bin/kwtty, from before kwbox (now /usr/bin/kwbox tty)"
+		return 1
+	fi
 	if chroot /mnt /bin/sh -c : 2>/dev/null; then
 		bad="/sbin/init is missing or not executable"
 	elif [ -e /mnt/bin/sh ] || [ -L /mnt/bin/sh ]; then

@@ -4,12 +4,12 @@ Remove items when they are done.
 
 ## Not in the image
 
-The FreeDOS launcher demo (`web/src/demos/dos.ts`, hidden) boots the FreeDOS
+The FreeDOS launcher app (`web/src/apps/media/dos.ts`, hidden) boots the FreeDOS
 1.2 boot floppy in Alpine's qemu-system-i386 with the curses display. On
 the riscv64 guest it was too slow for the launcher (about 70 s from qemu's
 start to the prompt, 2026-11-15), also with a stripped FDCONFIG.SYS and
 AUTOEXEC.BAT and resuming from a qemu state saved at the prompt (in the
-demo now): qemu's TCG keeps writing new code, which kwemu interprets or
+app now): qemu's TCG keeps writing new code, which kwemu interprets or
 recompiles. Not yet run on the aarch64 guest (Alpine has qemu-system-i386
 and qemu-ui-curses 11.0.3 for aarch64).
 
@@ -175,7 +175,7 @@ Open:
    Android, and JSPI inside one. A service worker is unsuitable, since
    browsers stop idle ones.
 6. **glibc distros and systemd**: Debian 13 is a distro image
-   (`--distro debian`, kernel/guest.md) with apt; the page's Ubuntu demo
+   (`--distro debian`, kernel/guest.md) with apt; the page's Ubuntu app
    runs Ubuntu Base in a chroot on Alpine. systemd (once installed from
    apt) booted Ubuntu Base 26.10 to multi-user.target on 2026-11-18; no
    image ships it. Next: systemd as a distro's init with the kw layer's
@@ -243,8 +243,11 @@ Open:
      (Chrome, 14-thread Mac), so 8 CPUs give little over 4 (testing.md,
      Profiling CPUs and worker mode, 2026-11-19). Not yet traced (a
      `kernel/build.sh stats` kernel's per-CPU counters would say where the
-     CPUs wait). In Safari 27.2 parallel work got slower with every CPU
-     (0.4x on 4); the page boots one CPU there (`webkitEngine()`).
+     CPUs wait). On other workloads (/smp-probe.html, 2026-11-23, the
+     same Mac) 8 CPUs ran 5.4-6.9x in Chrome and 5.2-5.8x in Safari.
+     Guest LDAR and LDXR are still wasm atomic loads, which JavaScriptCore
+     runs as read-modify-writes: threads that load one shared word in a
+     loop may contend there (not measured).
    - Under host load (kernel/smp.md, Waiting for another CPU): a
      synchronous TLB shootdown to a
      CPU running user code still waits until that CPU's host thread runs
@@ -272,7 +275,8 @@ Open:
      one CPU. Run in headless Chromium (2 and 4 CPUs: boot, a terminal
      window, glimmer, the JIT on every CPU, parallel loops scaling) and
      by hand on a deployed build in desktop Chrome, Firefox and on iOS.
-     Desktop Safari 27.2 runs it, slower with each CPU (above). Not
+     Desktop Safari 27.2 runs it and scales as Chrome does (testing.md,
+     Profiling CPUs and worker mode). Not
      tried: Android, a hidden tab (worker throttling), long sessions. The page offers it when its release
      bundle carries the SMP patch, as releases do since 2026-11-17
      (testing.md, Release workflow, lists the SMP checks the workflow
@@ -376,20 +380,25 @@ Open:
   Before the first aarch64 release it needs one smoke run (`release`
   unchecked), which shows its time on a hosted runner and whether
   kwtest's timing checks hold there with the A64 JIT.
-- **aarch64: FMA, AdvSIMD FP and system instructions are calls of the
-  interpreter in compiled code.** The A64 JIT (a64/jit.md)
+- **aarch64: scalar FMA, the rest of AdvSIMD FP and system instructions
+  are calls of the interpreter in compiled code.** The A64 JIT (a64/jit.md)
   translates every ALU, memory and branch op, the frequent FP moves,
   compares and AdvSIMD moves, scalar FP arithmetic and conversions (with
   a fast path that needs FPCR's defaults and calls the interpreter off
   it; double FMUL, FDIV and FSQRT only once FPSR.IXC is set) inline
   (generic.zig), and where the host compiles SIMD the integer AdvSIMD
-  ops, LD1/ST1, LDP/STP of V registers, AES, PMULL, SHA1, SHA256 and
-  SHA512 (vec.zig); the other generic ops are calls of the reference
-  interpreter through the kernel's function table, with the module's
-  registers spilled around them (2026-11-18). Exclusives, LDAR/STLR and
-  the LSE atomics are inline too, with wasm atomics in SMP builds
-  (atomic.zig); pairs and CASP stay calls. The largest count left is
-  FMADD (a64/performance.md, Where the time goes).
+  ops, the AdvSIMD FP forms a64/jit.md lists (vector arithmetic, min/max,
+  compares, single-precision FMLA/FMLS and conversions; a fast path, and
+  off it a call that stores only the V registers read), LD1/ST1, LDP/STP
+  of V registers, AES, PMULL, SHA1, SHA256 and SHA512 (vec.zig); the
+  other generic ops (among them the scalar AdvSIMD FP forms, pairwise and
+  across-lanes FP, FMULX, FABD, FACGE/FACGT, the reciprocal estimates and
+  steps, FRINT*, the other FCVT* and the 2D FMLA/FMLS and conversions)
+  are calls of the reference interpreter through the kernel's function
+  table, with the module's registers spilled around them (2026-11-24).
+  Exclusives, LDAR/STLR and the LSE atomics are inline too, with wasm
+  atomics in SMP builds (atomic.zig); pairs and CASP stay calls. The
+  largest count left is FMADD (a64/performance.md, Where the time goes).
 - **aarch64: OpenSSL's NEON and crypto paths need wasm SIMD in the
   host.** The image's libcrypto now picks its code from HWCAP and the
   kernel enables SHA512 by default, because the JIT translates those
@@ -398,20 +407,14 @@ Open:
   engine has no SIMD (V8 on an x86-64 without SSE4.1) runs them as
   interpreter calls, 2-13x slower than the integer paths would be; such a
   host could boot with `kw.isa=-sha512` or set `OPENSSL_armcap=0`.
-- **aarch64 page: not yet opened in a browser.** The launcher demos (web.md,
+- **aarch64 page: not yet opened in a browser.** The launcher's apps (web.md,
   Launcher), the stand-ins (web.md, Stand-ins) and qemu-user are checked
   through the Node SDK only (2026-11-18): static busybox binaries of
   x86_64, riscv64, i386 and armv7 each installed their qemu and library
   root on first run in 8-9 s and then ran in 0.2-0.3 s. In a browser,
   writing claude's 357 MB and opencode's 248 MB to the IndexedDB data disk
-  has not been timed, and every demo's first run there waits on Wisp
+  has not been timed, and every app's first run there waits on Wisp
   instead of the host's network.
-- **No seccomp**: `arch/wasm` has no seccomp filter support, so `bwrap
-  --seccomp FD` fails, and GTK programs that load images through glycin
-  abort. Workaround in the image: `/usr/local/bin/bwrap`
-  (`guest/distro/alpine/rootfs/usr/local/bin/bwrap`) drops the seccomp arguments. The fix is
-  seccomp in the arch (a syscall entry hook and the `asm/syscall.h`
-  helpers); remove the shim then.
 - **kwfb: mmap racing a mode change.** An `mmap` of `/dev/fb0` racing a
   mode change from another thread of the same program can map the old
   buffer (found 2026-11-16, on UP too). Not fixed.

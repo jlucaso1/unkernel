@@ -48,6 +48,10 @@
 #define glEndTransformFeedback kw_glEndTransformFeedback
 #define glPauseTransformFeedback kw_glPauseTransformFeedback
 
+/* WebGL's uniform buffer sizes: kw_gl.js pads buffers and uniform buffer
+ * ranges to 16 bytes. */
+#define glBindBufferRange kw_glBindBufferRange
+
 /* GL_RENDERER: the WebGL implementation's own name (kw_gl.js), which vrend
  * forwards to the guest ("virgl (...)") in place of "WebKit WebGL". */
 #define glGetString kw_glGetString
@@ -70,6 +74,8 @@ void kw_glDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count
                             const void *indices);
 void kw_glEndTransformFeedback(void);
 void kw_glPauseTransformFeedback(void);
+void kw_glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset,
+                          GLsizeiptr size);
 const GLubyte *kw_glGetString(GLenum name);
 
 bool epoxy_has_gl_extension(const char *extension);

@@ -59,7 +59,7 @@ export type MountsOption = Record<string, FsSource | MountSpec>;
 export type MountErrorCode =
 	/** The instance has no vsock device, or the guest's kernel has no 9p (CONFIG_9P_FS). */
 	| "ENODEV"
-	/** The guest has no kw9p (an image from before host file systems). */
+	/** The guest has no kwbox (a base from before it). */
 	| "ENOENT"
 	/** The path is already a mount point (in the guest, or by this SDK), or busy at unmount. */
 	| "EBUSY"
@@ -205,7 +205,13 @@ class MountHandle implements Mount {
 	}
 }
 
-/** @internal Run `cmd` in the guest as root (mount, umount, kwcmd sync: /run/kw/bin) with a deadline over the whole run (exec()'s own covers only reaching kwtty); it is killed when it runs out. */
+/** @internal The guest's tools as one program (guest/src/kwbox.c): `kwbox TOOL ARGS`, in the base's kw layer. */
+export const KWBOX = "/usr/bin/kwbox";
+
+/** @internal A guest without KWBOX: a base from before it (kwtty refused the exec). */
+export const noKwbox = (msg: string) => msg.includes(`exec ${KWBOX}: No such file`);
+
+/** @internal Run `cmd` in the guest as root (mount, umount, kwbox cmd sync: /run/kw/bin) with a deadline over the whole run (exec()'s own covers only reaching kwtty); it is killed when it runs out. */
 export async function guestRun(vsock: Vsock, file: string, args: string[], timeout: number): Promise<ExecResult<string>> {
 	const ac = new AbortController();
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -356,13 +362,13 @@ export class MountTable {
 		const timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
 		let r: ExecResult<string>;
 		try {
-			r = await guestRun(vsock, "kw9p", [exp.name, p, ...(opts.readOnly ? ["ro"] : [])], timeout);
+			r = await guestRun(vsock, KWBOX, ["9p", exp.name, p, ...(opts.readOnly ? ["ro"] : [])], timeout);
 		} catch (e) {
 			const code = e instanceof PtyError ? e.code : "";
 			const msg = (e as Error)?.message ?? String(e);
 			if (this.#down || code === "ECONNABORTED" || code === "ECONNRESET") fail(new MountError("ECONNABORTED", `mount ${p}: the kernel exited`, e));
 			if (code === "ETIMEDOUT") fail(new MountError("ETIMEDOUT", `mount ${p}: ${/killed/.test(msg) ? msg : `no answer from the guest's kwtty within ${timeout} ms (an image without kwtty, or still booting?)`}`, e));
-			if (code === "EREMOTE" && /exec kw9p: No such file/.test(msg)) fail(new MountError("ENOENT", `mount ${p}: the guest has no /usr/bin/kw9p (an image from before host file systems)`, e));
+			if (code === "EREMOTE" && noKwbox(msg)) fail(new MountError("ENOENT", `mount ${p}: the guest has no ${KWBOX} (a base from before kwbox)`, e));
 			fail(new MountError("EREMOTE", `mount ${p}: ${msg}`, e));
 		}
 		if (r!.exitCode !== 0) {

@@ -19,7 +19,7 @@ Mesa -> unix socket -> vtest-bridge bridge --link vsock:2:PORT -> byte stream
 | File | What |
 | --- | --- |
 | `vtest-bridge.c` | `bridge` mode: the vtest socket, fd termination, and the link to the far side: the page's WebSocket (and serves the page), or with `--link unix:PATH` or `vsock:CID:PORT` a byte stream it connects to; `helper` mode: the relay's far end against a real server |
-| `build-guest.sh` | the guest's build: static aarch64-linux-musl, stream link only (`-DVTEST_BRIDGE_STREAM_ONLY`: no WebSocket, no helper, libc only); the same build ships in the base's kw layer as `/usr/lib/kw/vtest-bridge` (`guest/base/build.sh`), which the SDK's `gl` option starts |
+| `build-guest.sh` | the guest's build: static aarch64-linux-musl, stream link only (`-DVTEST_BRIDGE_STREAM_ONLY`: no WebSocket, no helper, libc only); the same build ships in the base's kw layer as `kwbox vtest`, linked into the layer's one program with the other guest tools (`guest/base/build.sh`, `guest/src/kwbox.c`), which the SDK's `gl` option starts |
 | `index.html`, `main.js` | the page: connects back to the bridge, hosts one renderer: `?renderer=wasm` (the default; `./virgl.mjs` next to the page, or `?module=URL`) or `relay`; `?glcheck=1` logs every WebGL call that raises an error, `?glcount=1` the calls made most often |
 | `mux.js` | the WebSocket framing and a WebSocketStream wrapper |
 | `relay.js` | the stand-in renderer |

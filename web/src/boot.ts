@@ -7,8 +7,8 @@
 // module compiled here; input and frames cross through shared memory when
 // the page is cross-origin isolated, else as messages, and sound as messages):
 // a wterm terminal with a systemd-style boot transcript, the status
-// indicator and stages (ui.ts), and the kernel's console as window 0, with
-// more terminal windows over vsock (windows.ts), the guest preview
+// indicator and stages (ui.ts), and the kernel's console as terminal 0, with
+// more terminals over vsock (wterms.ts), the guest preview
 // (preview.ts: guest web servers in an iframe), and the Wayland desktop
 // (wayland.ts: the guest's Wayland apps as windows, through kwshm). With several CPUs (?cpus=N,
 // config.ts) it loads the SMP kernel instead and boots it in worker mode,
@@ -26,21 +26,25 @@ import "@wterm/dom/src/terminal.css";
 import { WTerm } from "@wterm/dom";
 import { prefetchApkIndexes } from "./apk.ts";
 import { createAudioOut } from "./audio.ts";
+import { autoHide } from "./autohide.ts";
 import { AUTO_SUSPEND_HOLD_MS, AutoSuspend, AutoSuspendSkip, LEAVE_OFFER_MS, LEAVE_STAYED_MS, Pause, SuspendSaveError, allowLeave, autoSuspendLabel, pageLeaving, quietStart, resumeAskedFor, resumeChoice, resumedNote, sessionRoom, wantLeavePrompt, type SuspendFacts } from "./autosuspend.ts";
-import { CPUS_ONCE_KEY, GL_DISTROS, INLINE_ONCE_KEY, REPO, UP_ONCE_KEY } from "./config.ts";
-import { attachDataDisk, detachDataDisk, downloadKwsparse, exportDataDisk, fmtSize, importDataDisk, resetDataDisk, storageState, acquireDiskLock, type DataAttach } from "./data.ts";
+import { CPUS_ONCE_KEY, GL_DISTROS, INLINE_ONCE_KEY, REPO, UP_ONCE_KEY, dataSizeCap, vkAdapterBlocker } from "./config.ts";
+import { attachDataDisk, detachDataDisk, downloadKwsparse, exportDataDisk, importDataDisk, resetDataDisk, storageState, acquireDiskLock, type DataAttach } from "./data.ts";
 import { createDisplayUi } from "./display.ts";
+import { isPageChrome, ownsKeys } from "./focus.ts";
+import { agoSince, capitalize, fmtMiB, fmtS, fmtSize, plural } from "./format.ts";
 import { KW } from "./kw.ts";
 import { showcaseFromUrl, waitPort } from "./launcher.ts";
 import { browserNet, browserNetSpec } from "./net.ts";
 import { openCommand } from "./open.ts";
-import { attachPreview, closePreview, openPreview, previewSupported, previewUrl } from "./preview.ts";
-import { ui$ } from "./store.ts";
+import { attachPreview, closePreview, openPreview, previewState, previewSupported, previewUrl } from "./preview.ts";
+import { isRunning, isStopped, ui$ } from "./store.ts";
+import { currentTerminal } from "./termtabs.ts";
 import { ScreenTail, clearSession, loadSession, saveSession, sessionCpus, sessionInfo, sessionMismatch, type SessionDevices, type SessionMeta } from "./session.ts";
-import { APPLE, CHORD } from "./shortcuts.ts";
+import { APPLE, CHORD } from "./keys.ts";
 import { dropLegacyScope } from "./sw.ts";
 import { clearResumeRequest, setResumeRequest, takeResumeRequest } from "./ui.ts";
-import { createWindows, pasteText, setTermFont, termText, TERM_OPTIONS } from "./windows.ts";
+import { createTerminals, pasteText, setTermFont, termText, TERM_OPTIONS } from "./wterms.ts";
 import { attachWayland, waylandApi } from "./wayland.ts";
 import {
 	BootError, ConsoleRouter, KernelInstance, SnapshotCommitError, WorkerKernel, bundledBoot, createKernel, loadKernelModule, openDistroDisk, serveWasiPrograms, snapshotDiskMismatch,
@@ -55,10 +59,8 @@ type GpuRendererStats = NonNullable<GlStats["gpu"]>;
 type StageError = Error & { kind?: string; stageId?: string };
 const tag = (e: unknown, kind: string, stageId: string): StageError => Object.assign(e instanceof Error ? e : new Error(String(e)), { kind, stageId });
 
-const fmtMiB = (n: number) => `${(n / 1048576).toFixed(1)} MiB`;
 /** How long the toast after a resume ("Resumed the session suspended …", sayResumed()) shows. */
 const RESUMED_TOAST_MS = 5000;
-const fmtS = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`);
 
 // The terminal's colours and font are CSS custom properties (style.css, #term).
 const SGR = { ok: "\x1b[32m", warn: "\x1b[33m", fail: "\x1b[31m", busy: "\x1b[36m", dim: "\x1b[2m", gray: "\x1b[90m", bold: "\x1b[1m", off: "\x1b[0m" };
@@ -144,13 +146,11 @@ export function start(): void {
 
 	// A key typed for the guest (into a terminal, or the display), seen ahead of display.ts's routing,
 	// which keeps the display's keys to itself: it ends a pause by hand and drops the notification that
-	// offers one (guestKey, set with them below). The shortcut prefix's keys never get here (shortcuts.ts).
+	// offers one (guestKey, set with them below). The shortcut prefix's keys never get here (keys.ts).
 	let guestKey: (() => void) | null = null;
 	addEventListener("keydown", (e) => {
 		if (!guestKey || !e.isTrusted || /^(Shift|Control|Alt|Meta|CapsLock|Fn)$/.test(e.key)) return;
-		const t = e.target as Element | null;
-		if (t?.closest?.("#panel, #scrim, #bar, #confirm, #paste, #launcher, #toast, #resume-card")) return;
-		if (t?.closest?.("input, textarea, select, [contenteditable]") && !t.closest("#terms")) return;
+		if (ownsKeys(e.target)) return;
 		guestKey();
 	}, true);
 
@@ -162,7 +162,7 @@ export function start(): void {
 	});
 
 	// --- data disk (persistent /data) -------------------------------------------
-	// Shown in the panel's Environment list ("Data disk", "Storage") and its
+	// Shown in System's Environment list ("Data disk", "Storage") and Settings'
 	// Data disk section; QuotaExceededError and other failed saves are errors.
 	let data: DataAttach | null = null;
 	let saveErrorShown = -Infinity, storageFailed = false;
@@ -205,11 +205,11 @@ export function start(): void {
 			? `Saved in this browser (IndexedDB ${d.store?.name}): ${fmtSize(d.size)} disk, ${blocks} blocks (${fmtSize(blocks * 4096)}) stored.`
 			: `In memory only: ${data?.notice ?? d.notice ?? "not saved"}.`);
 	}
-	async function openData(module: WebAssembly.Module): Promise<BlockDevice[]> {
+	async function openData(module: WebAssembly.Module, size: number | undefined): Promise<BlockDevice[]> {
 		// Opening IndexedDB, the tab lock, and loading the stored blocks (or seeding from the template).
 		const t0 = performance.now();
 		try {
-			data = await attachDataDisk({ enabled: cfg.data, bundled: bundledBoot(module).datadisk, log: dataLog, onError: saveError });
+			data = await attachDataDisk({ enabled: cfg.data, bundled: bundledBoot(module).datadisk, size, log: dataLog, onError: saveError });
 		} catch (e) {
 			data = { disk: null, lock: null, reason: `failed: ${(e as Error).message}` };
 			console.error(e);
@@ -252,13 +252,13 @@ export function start(): void {
 	 * page (the worker then is the only writer of the store; a tab without
 	 * the lock gets a snapshot); the worker opens IndexedDB and builds it.
 	 */
-	async function dataSpec(): Promise<DiskSpec[]> {
+	async function dataSpec(size: number | undefined): Promise<DiskSpec[]> {
 		if (!cfg.data) data = { disk: null, lock: null, reason: "off (?data=0)" };
 		else if (typeof indexedDB === "undefined") data = { disk: null, lock: null, reason: "no IndexedDB in this browser" };
 		else {
 			const lock = await acquireDiskLock();
 			data = { disk: null, lock, from: "bundled in the kernel" };
-			return [{ kind: "data", template: "bundled", mode: lock.held ? "persistent" : "snapshot", optional: true }];
+			return [{ kind: "data", template: "bundled", mode: lock.held ? "persistent" : "snapshot", size, optional: true }];
 		}
 		KW.dataDisk = null;
 		showData(null, 0);
@@ -338,7 +338,7 @@ export function start(): void {
 	KW.importData = async (file) => {
 		const bytes = file instanceof Uint8Array ? file : new Uint8Array(await file.arrayBuffer());
 		await takeOverData();
-		const r = await importDataDisk(bytes, { size: data?.disk?.size ?? workerData()?.size, log: dataLog });
+		const r = await importDataDisk(bytes, { log: dataLog }); // any size: the next boot grows it to ?datasize=, if larger
 		ui.hostLog(`[host] data disk: imported ${r.blocks} blocks; reloading`);
 		reloadPage();
 		return r;
@@ -383,9 +383,10 @@ export function start(): void {
 	/**
 	 * A quiet resume (every resume: after the Resume button, a suspend in the
 	 * background, or on a plain load; autosuspend.ts quietStart()): the
-	 * splash ("Resuming") stays over the terminal and the host's boot lines
-	 * are held back (the Kernel log has them), so the first thing the
-	 * terminal shows is the screen as it was (markRunning()). A plain load
+	 * top bar's boot indicator says "Resuming", the console only its faint
+	 * placeholder, and the host's boot lines are held back (the Kernel log
+	 * has them), so the first thing the terminal shows is the screen as it
+	 * was (markRunning()). A plain load
 	 * starts so until the saved session's meta says whether there is one to
 	 * resume (boot()). A load that boots fresh or fails after all shows them
 	 * (unquiet()).
@@ -397,27 +398,28 @@ export function start(): void {
 		const q = early ?? [];
 		early = null;
 		for (const d of q) term.write(d);
-		if (!cfg.mobile) term.focus();
+		if (!quietResume) ui.consoleShown(); // the first host lines are on it now
+		if (!cfg.coarse) term.focus(); // not on touch, as everywhere the page focuses by itself: it would raise the on-screen keyboard
 	});
-	// --- terminal windows (windows.ts) -------------------------------------------
-	// Window 0 is this console; 1 to 9 are terminal sessions over vsock, opened
+	// --- terminals (wterms.ts) -------------------------------------------------
+	// Terminal 0 is this console; 1 to 9 are terminal sessions over vsock, opened
 	// once user space runs (guestReady) and closed when the kernel stops.
 	let guestUp = false, stopped = false;
 	let readyResolve!: (vm: KernelHandle) => void, readyReject!: (e: Error) => void;
 	const guestReady = new Promise<KernelHandle>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
 	guestReady.catch(() => {});
 	const checkReady = () => { if (guestUp && vm && !stopped) readyResolve(vm); };
-	/** The kernel stopped or never started: no more windows. */
-	const stopWindows = (why: string) => {
+	/** The kernel stopped or never started: no more terminals. */
+	const stopTerminals = (why: string) => {
 		stopped = true;
 		readyReject(new Error(why));
-		windows.closeAll();
+		terminals.closeAll();
 	};
-	const windows = createWindows({
-		term0: term, send0: send, ready: () => guestReady, alive: () => !stopped && !ended() && ui.state() !== "error" && ui.state() !== "halted",
+	const terminals = createTerminals({
+		term0: term, send0: send, ready: () => guestReady, alive: () => !stopped && !ended() && !isStopped(ui$().get()),
 		autoFocus: !cfg.coarse,
 	});
-	KW.windows = windows;
+	KW.windows = terminals; // "windows": the name the browser tests use
 	KW.ready = () => guestReady;
 	// ?showcase: the scripted tour of the demos (launcher.ts).
 	void guestReady.then(showcaseFromUrl, () => {});
@@ -428,16 +430,17 @@ export function start(): void {
 	void guestReady.then(showBase, () => {});
 	KW.preview = { open: openPreview, close: closePreview, url: previewUrl };
 	// Paste, the key bar, the touch controls and the shortcuts act on the current window.
+	// The console minimizes itself once the system runs if nobody used it (autohide.ts); these count as use.
+	autoHide.init();
 	KW.term = {
-		focus: () => windows.focus(),
-		paste: (t) => windows.sendCurrent(pasteText(windows.currentTerm(), t)), // the panel's Paste
-		send: (d) => windows.sendCurrent(d),
-		appCursor: () => !!windows.currentTerm().bridge?.cursorKeysApp(),
-		setFontSize: (px) => { setTermFont(termEl, px); windows.setFont(px); },
-		notice: (m) => write(`\r\n\x1b[1;31m${m.replace(/\n/g, "\r\n")}\x1b[0m\r\n`), // the console's
+		focus: () => { autoHide.used(); terminals.focus(); },
+		paste: (t) => { autoHide.used(); terminals.sendCurrent(pasteText(terminals.currentTerm(), t)); }, // the key bar's Paste
+		send: (d) => { autoHide.used(); terminals.sendCurrent(d); },
+		appCursor: () => !!terminals.currentTerm().bridge?.cursorKeysApp(),
+		setFontSize: (px) => { setTermFont(termEl, px); terminals.setFont(px); },
+		notice: (m) => { autoHide.needed(); write(`\r\n\x1b[1;31m${m.replace(/\n/g, "\r\n")}\x1b[0m\r\n`); }, // the console's (shown again if it hid itself)
 	};
 	KW.screenText = () => termText(term);
-	if (!quietResume) ui.hideSplash(); // from here on the boot is shown on the terminal
 
 	// --- host boot lines, systemd style -------------------------------------------
 	// "[  OK  ] Downloaded ..." for each host step, and one transient line
@@ -451,7 +454,8 @@ export function start(): void {
 	function unquiet() {
 		if (!quietResume) return;
 		quietResume = false;
-		ui.hideSplash();
+		ui.bootResume(false);
+		ui.consoleShown();
 		write(held + live);
 		held = "";
 	}
@@ -500,10 +504,10 @@ export function start(): void {
 	const summary = () => `${SGR.dim}Booted in${SGR.off} ${SGR.bold}${fmtS(Date.now() - KW.t0)}${SGR.off}` +
 		(smp ? ` ${SGR.dim}on ${cfg.cpus} CPUs${SGR.off}` : cfg.worker ? ` ${SGR.dim}in a Web Worker${SGR.off}` : "") + "\r\n";
 	// Two lines under the summary of a fresh boot: the source (an OSC 8 link,
-	// which wterm opens on Ctrl/⌘-click) and how to open the demo launcher.
+	// which wterm opens on Ctrl/⌘-click) and how to open the app launcher.
 	const link = (url: string, text: string) => `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
 	const notes = () => [`${SGR.dim}Source${SGR.off}  ${link(REPO, REPO.replace(/^https:\/\//, ""))}`,
-		`${SGR.dim}Demos${SGR.off}   ${cfg.coarse ? "tap ❯ in the status line" : `press ${SGR.bold}${APPLE ? "⌘ K" : `${CHORD}-O`}${SGR.off}`}`];
+		`${SGR.dim}Apps${SGR.off}    ${cfg.coarse ? "tap the grid in the Dock" : `press ${SGR.bold}${APPLE ? "⌘ K" : `${CHORD}-O`}${SGR.off}`}`];
 	// Pip, glimmer's seed and the logo (assets/logo.svg), left of the summary
 	// and the notes; left out where the lines would wrap.
 	const PIP_W = PIP.width + 2; // with the gap before the text
@@ -532,13 +536,15 @@ export function start(): void {
 		ui.stage("boot", "done");
 		ui.stage("userspace", "done", why);
 		ui.setState("running");
+		ui.bootDone(); // the boot indicator fades out as what is below is written, in this same task
+		if (!resumed) autoHide.arm(); // a resumed session's windows stay as they were
 		if (phase === "boot" && !cfg.verbose) {
 			phase = "user";
 			setLive(null); // "Starting Linux", replaced by its result
 			if (resumed) {
-				// Quiet: only the screen as it was, then the splash goes (the toast says it: sayResumed()).
+				// Quiet: only the screen as it was, then the boot indicator goes (the toast says it: sayResumed()).
 				// Else (the boot lines showed after all: a plain load whose session took long to read) a line too.
-				if (quietResume) { quietResume = false; held = ""; ui.hideSplash(); }
+				if (quietResume) { quietResume = false; held = ""; }
 				else write(okLine(resumed.note) + "\r\n\r\n" + summary() + "\r\n");
 				if (resumed.screen?.length) write(resumed.screen); // the console as it was (the guest does not redraw it)
 				write(replay);
@@ -546,7 +552,7 @@ export function start(): void {
 				unquiet(); // not the resume asked for (a fresh boot): its lines after all
 				// Two steps: the kernel until it runs /init, then the base mounting the
 				// distro image (its first blocks come over HTTP) and the distro's init.
-				const user = cfg.distro ? cfg.guest[0]!.toUpperCase() + cfg.guest.slice(1) : "the base shell";
+				const user = cfg.distro ? capitalize(cfg.guest) : "the base shell";
 				write(okLine(`Started Linux${cmdlineNote()}`, ui.stageTime("boot")) + "\r\n" +
 					okLine(`Started ${user}`, ui.stageTime("userspace")) + "\r\n\r\n" + intro() + "\r\n" + replay);
 			}
@@ -559,6 +565,7 @@ export function start(): void {
 	/** Text the terminal shows once user space runs (kept for the redraw until then). */
 	function show(t: string) {
 		screenTail.push(t);
+		autoHide.output();
 		if (phase === "user") write(t);
 		else if (!cfg.verbose && (replay += t).length > 65536) replay = replay.slice(-49152);
 	}
@@ -577,6 +584,7 @@ export function start(): void {
 			const reason = plain(rs[1]!);
 			ui.hostLog(`[host] the base started its base shell: ${reason}`);
 			ui.baseShell(reason);
+			autoHide.needed();
 		}
 		const m = safeSeen ? null : /kw-overlay: SAFE MODE: ([^\r\n]*)\r?\n/.exec(userTail);
 		if (!m) return;
@@ -584,6 +592,7 @@ export function start(): void {
 		const reason = plain(m[1]!);
 		ui.hostLog(`[host] the guest booted in safe mode: ${reason}`);
 		ui.safeMode(reason);
+		autoHide.needed();
 	}
 	/** A whole line during the boot phase, above the transient line. */
 	const bootLine = (s: string) => { if (quietResume) held += s; else write(live ? `\r\x1b[K${s}${live}` : s); };
@@ -627,6 +636,7 @@ export function start(): void {
 			t0Download = performance.now();
 			ui.stage("kernel", "active", d.url);
 		}
+		ui.download(d.loaded, d.total); // the boot indicator's ring
 		if (d.done) {
 			const ms = performance.now() - t0Download;
 			const rate = `${(d.loaded / 1048576 / Math.max(ms / 1000, 0.001)).toFixed(1)} MiB/s`;
@@ -709,10 +719,6 @@ export function start(): void {
 		cfg.glWhy = glOwn.why;
 		glOwn = null;
 	};
-	const ago = (t: number) => {
-		const m = Math.round((Date.now() - t) / 60000);
-		return m < 1 ? "just now" : m < 120 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
-	};
 	/**
 	 * Resume the saved session, if this page can: the same kernel and CPU
 	 * count (another count: offerResumeCpus(), before), the same devices and
@@ -732,7 +738,7 @@ export function start(): void {
 			return null;
 		}
 		if (!meta || sessionCpus(meta) !== cfg.cpus) return null;
-		const label = `saved ${ago(meta.saved)}, ${fmtMiB(meta.bytes)}`;
+		const label = `saved ${agoSince(meta.saved)}, ${fmtMiB(meta.bytes)}`;
 		// Inline: the disks as the snapshot lists them, the distro image first.
 		const inlineDisks = !cfg.worker ? [...(distroDisk ? [distroDisk] : []), ...disks as BlockDevice[]] : null;
 		// A data disk that changed since can never resume it: forget it then.
@@ -753,7 +759,7 @@ export function start(): void {
 			return null;
 		}
 		const on = smp ? `, ${cpusText(cfg.cpus)}` : "";
-		if (choice === "ask" && !await ui.ask({ title: "resume", msg: `Resume the session suspended ${ago(meta.saved)} (${fmtMiB(meta.bytes)}, ${meta.memoryMiB} MiB of memory${on})? Boot fresh discards it: a fresh boot changes the data disk.`, ok: "Resume", cancel: "Boot fresh" })) {
+		if (choice === "ask" && !await ui.ask({ title: "resume", msg: `Resume the session suspended ${agoSince(meta.saved)} (${fmtMiB(meta.bytes)}, ${meta.memoryMiB} MiB of memory${on})? Boot fresh discards it: a fresh boot changes the data disk.`, ok: "Resume", cancel: "Boot fresh" })) {
 			ui.hostLog(`[host] suspended session (${label}): booting fresh instead, discarded`);
 			await clearSession().catch(() => {});
 			return null;
@@ -769,18 +775,17 @@ export function start(): void {
 		}
 	}
 	/**
-	 * The preview panel open at the suspend, opened again on the resumed
+	 * The preview's Browser window open at the suspend, opened again on the resumed
 	 * machine once its port answers: the guest's server and its listening
 	 * socket are in the snapshot, while the old page's connections were reset
 	 * and the reload gave this kernel a new vmId (preview.ts), so the old
 	 * iframe could not have been kept.
 	 */
 	function reopenPreview(handle: KernelHandle, p: SessionMeta["preview"]) {
-		if (!p || !previewSupported() || ui$().get().preview) return;
+		if (!p || !previewSupported() || previewState()) return;
 		waitPort(handle, p.port, 15000).then(() => {
-			if (ended() || ui$().get().preview) return;
-			openPreview(p.port, p.path ?? "/");
-			ui$().set((st) => (st.preview ? { preview: { ...st.preview, shown: p.shown, fill: p.fill } } : {}));
+			if (ended() || previewState()) return;
+			openPreview(p.port, p.path ?? "/", { show: p.shown });
 			ui.hostLog(`[host] preview: port ${p.port} opened again after the resume`);
 		}, (e: Error) => {
 			ui.hostLog(`[host] preview: not opened again (${e.message})`);
@@ -845,7 +850,7 @@ export function start(): void {
 		if (smp && vm.stats().cpus !== cfg.cpus) throw new Error(`the SMP kernel runs on ${vm.stats().cpus} of ${cfg.cpus} CPUs here (their threads did not start); set CPUs to 1 under Options to suspend`);
 		const t0 = performance.now();
 		const target = vm;
-		ui.setState("running", "Suspending");
+		ui.setState("running", "Suspending", "saving");
 		let tSnap = 0, tStored = 0, bytes = 0, saved = 0, wrote = false;
 		let nowHeld!: () => void;
 		const holding = new Promise<void>((r) => { nowHeld = r; });
@@ -855,8 +860,9 @@ export function start(): void {
 				tSnap = performance.now() - t0;
 				saved = Date.now();
 				bytes = await saveSession(snap, {
-					saved, kernelUrl, devices: sessionDevices(), screen: screenTail.text(), worker: cfg.worker, distro: distroRef, preview: ui$().get().preview,
-					windows: windows.saved(snap.ttys ?? []), win: ui$().get().win, // the windows' sessions, detached by the restore (windows.ts)
+					saved, kernelUrl, devices: sessionDevices(), screen: screenTail.text(), worker: cfg.worker, distro: distroRef, preview: previewState(),
+					// The terminals' sessions, detached by the restore (wterms.ts), and the current terminal (the record's names stay: saved sessions load).
+					windows: terminals.saved(snap.ttys ?? []), win: currentTerminal(),
 				}, signal);
 				wrote = true;
 				tStored = performance.now() - t0;
@@ -873,7 +879,7 @@ export function start(): void {
 					const h = { saved, since: Date.now(), bytes, decide, lost: false };
 					holdState = h;
 					signal.addEventListener("abort", () => { h.lost = true; }, { once: true });
-					ui.setState("running", "Paused"); // before the page may be frozen (the tab's title follows)
+					ui.setState("running", "Paused", "held"); // before the page may be frozen (the tab's title follows)
 					nowHeld();
 				}),
 			} : {}),
@@ -946,13 +952,13 @@ export function start(): void {
 	// --- suspend in the background, and the question on leaving (autosuspend.ts) ------------
 	/**
 	 * The user has used this machine (typed, tapped or clicked outside the
-	 * page's chrome: the dialog, the status line, the question) since it
+	 * page's chrome: the system apps, the bars, the question; focus.ts) since it
 	 * booted, or it is a resumed session: worth suspending or asking about.
 	 */
 	let interacted = false;
 	const used = (e: Event) => {
 		if (interacted || !e.isTrusted) return;
-		if ((e.target as Element | null)?.closest?.("#panel, #scrim, #bar, #confirm")) return;
+		if (isPageChrome(e.target)) return;
 		interacted = true;
 	};
 	for (const ev of ["keydown", "pointerdown", "input", "paste"]) addEventListener(ev, used, { capture: true, passive: true });
@@ -961,7 +967,7 @@ export function start(): void {
 	/** The suspend running now was started by AutoSuspend. */
 	let autoSuspending = false;
 	const facts = (): SuspendFacts => ({
-		running: running && !!vm && !ended() && ui.state() === "running" && !suspending,
+		running: running && !!vm && !ended() && isRunning(ui$().get()) && !suspending,
 		suspending: !!suspending && !ended(),
 		held: !!holdState && !ended(),
 		interacted, hidden: document.visibilityState === "hidden",
@@ -983,7 +989,7 @@ export function start(): void {
 			// A session kept from before (the load after Reboot keeps one) would be replaced: only Suspend by hand does that.
 			// Not this machine's own record (resumed from, or left by a save given up whose removal failed).
 			if (kept && kept.saved !== resumedSaved && kept.saved !== strandedSaved)
-				throw new AutoSuspendSkip(`the session suspended ${ago(kept.saved)} is kept, and this would replace it (Suspend by hand to replace it)`);
+				throw new AutoSuspendSkip(`the session suspended ${agoSince(kept.saved)} is kept, and this would replace it (Suspend by hand to replace it)`);
 			// A save that cannot fit would only fail (the machine runs on), after parking it and writing for nothing.
 			const room = sessionRoom(cfg.cpus);
 			if (est?.quota && est.usage !== undefined && est.quota - est.usage < room)
@@ -1030,7 +1036,7 @@ export function start(): void {
 	function sayResumed(saved: number) {
 		if (document.visibilityState === "hidden") { resumedPending = saved; return; }
 		resumedPending = null;
-		ui.toast(resumedNote(ago(saved)), { ms: RESUMED_TOAST_MS });
+		ui.toast(resumedNote(agoSince(saved)), { ms: RESUMED_TOAST_MS });
 	}
 	document.addEventListener("visibilitychange", () => {
 		if (document.visibilityState !== "visible") return;
@@ -1129,7 +1135,7 @@ export function start(): void {
 		else { allowLeave(); location.reload(); }
 		return true;
 	}
-	const cpusText = (n: number) => `${n} CPU${n === 1 ? "" : "s"}`;
+	const cpusText = (n: number) => plural(n, "CPU");
 	/** The page's kernel for `n` CPUs (the SMP one is null without the bundle's patch). */
 	const kernelFor = (n: number) => (n > 1 ? cfg.kernelSmpUrl : cfg.kernelUrl);
 	/** Why this page cannot start `n` CPUs now, or null (config.ts: smpBlocker(), this tab's fallback to one CPU, the host's threads). */
@@ -1179,7 +1185,7 @@ export function start(): void {
 		}
 		const n = meta ? sessionCpus(meta) : cfg.cpus;
 		if (!meta || n === cfg.cpus) return false;
-		const label = `saved ${ago(meta.saved)}, ${fmtMiB(meta.bytes)}, ${cpusText(n)}`;
+		const label = `saved ${agoSince(meta.saved)}, ${fmtMiB(meta.bytes)}, ${cpusText(n)}`;
 		const why = sessionMismatch(meta, kernelFor(n), sessionDevicesFor(meta), distroRef) ??
 			(cfg.data && meta.devices.data && data?.lock && !data.lock.held ? "the data disk is open in another tab" : null);
 		if (why) {
@@ -1190,28 +1196,28 @@ export function start(): void {
 		const m = cfg.cpus;
 		const blocked = cpusBlocker(n);
 		if (blocked) {
-			const msg = `the session suspended ${ago(meta.saved)} runs on ${cpusText(n)}, which this page cannot start now (${blocked})`;
+			const msg = `the session suspended ${agoSince(meta.saved)} runs on ${cpusText(n)}, which this page cannot start now (${blocked})`;
 			ui.check("session", "Suspended session", "warn", `${label}; not resumed`, msg);
 			ui.hostLog(`[host] suspended session (${label}) not offered: ${msg}`);
 			if (meta.devices.data) {
-				if (!await ui.ask({ title: "resume", msg: `The session suspended ${ago(meta.saved)} runs on ${cpusText(n)}, which this page cannot start now (${blocked}). Booting on ${cpusText(m)} discards it: that boot changes the data disk.`, ok: `Boot on ${cpusText(m)}`, cancel: "Keep it" }))
-					return keepSession(`the session suspended ${ago(meta.saved)} needs ${cpusText(n)} (${blocked})`);
+				if (!await ui.ask({ title: "resume", msg: `The session suspended ${agoSince(meta.saved)} runs on ${cpusText(n)}, which this page cannot start now (${blocked}). Booting on ${cpusText(m)} discards it: that boot changes the data disk.`, ok: `Boot on ${cpusText(m)}`, cancel: "Keep it" }))
+					return keepSession(`the session suspended ${agoSince(meta.saved)} needs ${cpusText(n)} (${blocked})`);
 				ui.hostLog(`[host] suspended session (${label}): booting on ${cpusText(m)} instead, discarded`);
 				await clearSession().catch(() => {});
 				return false;
 			}
-			warn(`Not resuming the session suspended ${ago(meta.saved)}: it runs on ${cpusText(n)}, which this page cannot start now (${blocked}); it is kept`);
+			warn(`Not resuming the session suspended ${agoSince(meta.saved)}: it runs on ${cpusText(n)}, which this page cannot start now (${blocked}); it is kept`);
 			ui.toast(`Not resumed: the session needs ${cpusText(n)}`);
 			return false;
 		}
 		const dataNote = meta.devices.data ? ` Booting on ${cpusText(m)} discards it: that boot changes the data disk.` : ` Booting on ${cpusText(m)} keeps it for later.`;
-		if (!resumeAsked && !await ui.ask({ title: "resume", msg: `Resume the session suspended ${ago(meta.saved)} (${fmtMiB(meta.bytes)}, ${meta.memoryMiB} MiB of memory)? It resumes on ${cpusText(n)}, as it was saved.${dataNote}`, ok: `Resume on ${cpusText(n)}`, cancel: `Boot on ${cpusText(m)}` })) {
+		if (!resumeAsked && !await ui.ask({ title: "resume", msg: `Resume the session suspended ${agoSince(meta.saved)} (${fmtMiB(meta.bytes)}, ${meta.memoryMiB} MiB of memory)? It resumes on ${cpusText(n)}, as it was saved.${dataNote}`, ok: `Resume on ${cpusText(n)}`, cancel: `Boot on ${cpusText(m)}` })) {
 			ui.hostLog(`[host] suspended session (${label}): booting on ${cpusText(m)} instead`);
 			ui.check("session", "Suspended session", "info", `${label}; not resumed`, `booted on ${cpusText(m)} instead${meta.devices.data ? " (discarded: the data disk changes)" : ""}`);
 			if (meta.devices.data) await clearSession().catch(() => {});
 			return false;
 		}
-		const reason = `resuming the session suspended ${ago(meta.saved)}, which runs on ${cpusText(n)}`;
+		const reason = `resuming the session suspended ${agoSince(meta.saved)}, which runs on ${cpusText(n)}`;
 		return (n === 1 ? bootUpOnce(reason, true) : resumeOnCpus(n, reason)) ||
 			keepSession(`this browser refuses sessionStorage, which the reload on ${cpusText(n)} needs (set CPUs to ${n} under Options and Reboot to resume)`);
 	}
@@ -1222,7 +1228,7 @@ export function start(): void {
 	/** The image as the host read it (its superblock), as a boot line and the Distro row. */
 	function showDistro(info: { fs: string; size: number; label: string; uuid: string }, ms: number | null) {
 		if (!distro) return;
-		ok(`Attached the ${distro.name[0]!.toUpperCase()}${distro.name.slice(1)} image (${fmtMiB(info.size)}, streamed)`, ms);
+		ok(`Attached the ${capitalize(distro.name)} image (${fmtMiB(info.size)}, streamed)`, ms);
 		ui.check("distro", "Distro", cfg.distroWhy ? "warn" : "pass", distro.name, `${cfg.distroWhy ? `${cfg.distroWhy}; ` : ""}${distro.url}: ${info.fs}, ${fmtMiB(info.size)}, label ${info.label}, uuid ${info.uuid}; read-only /dev/wda, read with Range requests as the guest needs it`);
 		ui.hostLog(`[host] distro: ${distro.url} (${info.fs}, ${info.size} bytes, uuid ${info.uuid})${ms != null ? ` opened in ${fmtS(ms)}` : ""}`);
 	}
@@ -1248,6 +1254,82 @@ export function start(): void {
 		} catch (e) {
 			ui.hostLog(`[host] /run/kw-base: ${(e as Error)?.message ?? e}`);
 		}
+	}
+
+	/**
+	 * Guest Vulkan (on by default on Debian where WebGPU is; ?vk=0): the
+	 * Environment tab's "Guest Vulkan" row. The renderer loads on the guest's
+	 * first Vulkan instance (vm.vk.status, vm.vk.loaded), so until then the
+	 * row says it is not loaded; then the WebGPU adapter and how long the load
+	 * took, and (vm.vk.stats, every 2 s while they change) the instances
+	 * served and, from the renderer's counters over the last 2 s, frames
+	 * presented a second and draws per frame, with its errors where there are
+	 * any. A software adapter (SwiftShader) is a warning; so is a lost WebGPU
+	 * device (status "lost": the programs then running were cut off, the next
+	 * one gets a new device), as the GL row's context loss.
+	 */
+	function showVk(vm: KernelHandle) {
+		if (!cfg.vk) {
+			if (cfg.vkWhy) ui.check("vk", "Guest Vulkan", cfg.vkAsked ? "warn" : "info", "off", cfg.vkWhy);
+			return;
+		}
+		const vk = vm.vk;
+		if (!vk) {
+			ui.check("vk", "Guest Vulkan", "fail", "unavailable", "the SDK started no Vulkan renderer (the Kernel log says why)");
+			return;
+		}
+		const how = "Vulkan through the base's ICD (/usr/lib/kw/libvulkan_kw.so) on vsock port 1018; try: sudo apt-get install vulkan-tools, then vulkaninfo --summary, or vkcube --wsi wayland (the launcher's vkcube, vkmark)";
+		let shown = "", reported = false, frames = "";
+		let prev: Record<string, number> | null = null, prevAt = performance.now();
+		const show = () => {
+			const s = vk.status, st = vk.stats, at = performance.now(), r = st.renderer;
+			// Rates over the last interval (at least 1.5 s), from the current renderer's counters (they restart with a new renderer).
+			if (!r) { prev = null; frames = ""; }
+			else if (!prev || (r.presents ?? 0) < (prev.presents ?? 0)) { prev = { ...r }; prevAt = at; }
+			else if (at - prevAt >= 1500) {
+				const p = (r.presents ?? 0) - (prev.presents ?? 0), d = (r.draws ?? 0) - (prev.draws ?? 0), sec = (at - prevAt) / 1000;
+				frames = p ? `${(p / sec).toFixed(1)} frames presented a second, ${(d / p).toFixed(1)} draws a frame over the last ${fmtS(at - prevAt)}`
+					: d ? `${(d / sec).toFixed(0)} draws a second, no presents, over the last ${fmtS(at - prevAt)}` : "";
+				prev = { ...r };
+				prevAt = at;
+			}
+			const total = r ? `; this renderer: ${r.presents ?? 0} presents, ${r.draws ?? 0} draws, ${r.submits ?? 0} submits, ${r.translations ?? 0} shaders translated, ${fmtMiB(r.bytesRead ?? 0)} read back, ${r.liveObjects ?? 0} live objects` : "";
+			const errors = r?.errors ? `; ${plural(r.errors, "renderer error")} (WebGPU validation or failed operations; the browser console has them)` : "";
+			const losses = st.losses ? `; the WebGPU device was lost ${st.losses === 1 ? "once" : `${st.losses} times`}` : "";
+			// Wayland windows: zero-copy where wland offers external buffers on the relay's link (wayland/buffers.ts)
+			const ext = waylandApi.externalBuffers(), ws = waylandApi.stats();
+			const wl = ext === true ? `; Wayland windows: zero-copy presentation (external buffers: ${ws.extCommits} commits, ${ws.extImages} pictures${r ? `, ${r.externalPresents ?? 0} presents without readback` : ""})`
+				: ext === false ? `; Wayland windows: by readback into wl_shm (${cfg.wlGpu ? "the guest's relay has no external buffers" : "?wlgpu=0"})` : "";
+			const now = `${plural(st.connections, "Vulkan instance")} now, ${st.opened} so far${frames ? `; ${frames}` : ""}${total}${errors}${losses}${wl}`;
+			const key = `${s.state} ${s.adapter} ${now}`;
+			if (key === shown) return;
+			shown = key;
+			const name = s.adapter || "WebGPU adapter";
+			const soft = /swiftshader|llvmpipe|software|warp/i.test(name);
+			if (s.state === "ready") {
+				const load = s.loadMs === null ? "loaded" : `loaded in ${fmtS(s.loadMs)} on the guest's first Vulkan instance, ${fmtS(s.startedAt ?? 0)} after the page opened`;
+				if (!reported) {
+					reported = true;
+					console.log(`[unkernel] guest Vulkan: WebGPU adapter ${name}${soft ? " (software rendering)" : ""}; ${load}`);
+					ui.hostLog(`[host] guest Vulkan: WebGPU adapter ${name}${soft ? " (software rendering)" : ""}; ${load}`);
+				}
+				ui.check("vk", "Guest Vulkan", soft || r?.errors ? "warn" : "pass", name, `WebGPU: ${name}${soft ? " (a software adapter: no GPU behind it)" : ""}; ${load}. ${now}. ${how}.`);
+			} else if (s.state === "lost")
+				ui.check("vk", "Guest Vulkan", "warn", "WebGPU device lost", `the browser dropped the renderer's WebGPU device (${s.error ?? "memory pressure, a GPU reset, the GPU process ended"}): ` +
+					`the Vulkan programs that were running lost their device and must be restarted; the next one gets a new device and renderer, no page reload needed. ${now}.`);
+			else if (s.state === "loading")
+				ui.check("vk", "Guest Vulkan", "info", "loading", `${st.losses ? "a Vulkan program after a device loss: making a new renderer" : "the guest's first Vulkan instance: loading the renderer (a WebGPU device, kwvk-naga.wasm)"} for ${fmtS(at - (s.startedAt ?? at))}. ${how}.`);
+			else if (s.state === "failed")
+				ui.check("vk", "Guest Vulkan", "fail", "renderer failed", `the renderer did not load: ${s.error ?? "unknown error"}; Vulkan programs fail to create an instance. ${now}.`);
+			else
+				ui.check("vk", "Guest Vulkan", "info", "on, not loaded yet", `the renderer (WebGPU, and the SPIR-V to WGSL translator kwvk-naga.wasm, about 860 KB) is fetched and started on the guest's first Vulkan instance, which waits for it; nothing of it was loaded at boot. ${how}.`);
+		};
+		show();
+		const timer = setInterval(() => (ended() ? clearInterval(timer) : show()), 2000);
+		vk.loaded.then(show, (e: unknown) => {
+			show();
+			ui.toast(`Guest Vulkan: the renderer did not load (${(e as Error)?.message ?? e})`, { ms: 8000 });
+		});
 	}
 
 	/**
@@ -1294,7 +1376,7 @@ export function start(): void {
 				gpuPrev = st.gpu;
 				gpuPrevAt = at;
 			}
-			const now = `vtest: ${st.streams} forwarder link${st.streams === 1 ? "" : "s"}, ${st.clients} GL client${st.clients === 1 ? "" : "s"} now, ${st.opened} so far` +
+			const now = `vtest: ${plural(st.streams, "forwarder link")}, ${plural(st.clients, "GL client")} now, ${st.opened} so far` +
 				`${cfg.glStrictWaits ? "; busy waits answered as vtest does (?glwait=strict)" : ""}${times ? `. ${times}` : ""}${gpuTimes ? `. ${gpuTimes}` : ""}`;
 			const key = `${s.state} ${now}`;
 			if (key === shown) return;
@@ -1434,17 +1516,27 @@ export function start(): void {
 			session.then((m) => {
 				clearTimeout(settle);
 				if (quietResume && m && sessionCpus(m) === cfg.cpus && !sessionMismatch(m, kernelUrl, sessionDevicesFor(m), distroRef))
-					ui.splash("Resuming", "Restoring the suspended session…");
+					ui.bootResume(true);
 				else unquiet();
 			}, () => { clearTimeout(settle); unquiet(); });
 		}
 		let dataDisks: BlockDevice[] | DiskSpec[] = [];
+		// The data disk's size (?datasize=): a saved disk grows to it only when no suspended session
+		// that has the data disk is waiting, as its kernel knows the disk at the old size (Reboot drops it).
+		// Clamped to the browser's quota for the page: a larger disk would fail its writes once the quota is used up.
+		const dataSize = async () => {
+			if ((await session.catch(() => null))?.devices?.data) return undefined;
+			const quota = await navigator.storage?.estimate?.().then((e) => e.quota, () => undefined);
+			const gib = Math.min(cfg.dataSizeGiB, dataSizeCap(quota));
+			if (gib < cfg.dataSizeGiB) ui.hostLog(`[host] data disk: ${gib} GiB, not ${cfg.dataSizeGiB}: this browser lets the page keep ${fmtSize(quota!)}`);
+			return gib * 1073741824;
+		};
 		if (cfg.worker) {
 			// The worker builds the data disk and the network from specs.
 			ui.check("worker", "Worker mode", "pass", cfg.workerParam ? (cfg.workerAsked ? "on (?worker=1)" : "on (default)") : `for ${cfg.cpus} CPUs (${cfg.resumeCpus ? "the suspended session's" : `?cpus=${cfg.smpParam}`})`,
 				"the kernel, the data disk, the network, the display, input and sound devices run in a Web Worker" + (smp ? ", which starts the other CPUs as workers of its own" : ""));
 			ui.hostLog(`[host] worker mode: the kernel runs in a Web Worker, with the data disk, the network, the display, input and sound${smp ? `; ${cfg.cpus} CPUs` : ""}`);
-			dataDisks = await dataSpec();
+			dataDisks = await dataSpec(await dataSize());
 		}
 		if (await offerResumeCpus(session)) return; // reloading to resume on the session's CPU count, or kept
 		if (smp) loading = load(kernelUrl);
@@ -1485,7 +1577,7 @@ export function start(): void {
 				throw tag(e, "distro", "kernel");
 			}
 		}
-		if (!cfg.worker) dataDisks = await openData(module);
+		if (!cfg.worker) dataDisks = await openData(module, await dataSize());
 
 		await termReady.catch((e: unknown) => { throw tag(e, "terminal", ""); }); // the console needs it (and its size)
 		const memoryStage = () => {
@@ -1553,17 +1645,25 @@ export function start(): void {
 			onOutput: consoleWrite, log, onProgress,
 			display: cfg.display ? display.size : false, onDisplay: display.onDisplay, onInput: display.onInput,
 			sound: cfg.sound ? createAudioOut({ log }) : false, // Web Audio, ?sound=0 (audio.ts)
-			vsock: true, // the terminal windows (windows.ts: kwtty sessions)
+			vsock: true, // the terminals (wterms.ts: kwtty sessions)
 		};
 		// Guest GL on this thread's WebGL2 (Debian, on by default; showGl()), read when the kernel is
 		// made: a resumed session keeps its own (adoptSessionGl()). The renderer loads on the guest's
 		// first GL use (?glload=eager: before the boot); with it virtio-gpu, the guest's /dev/dri, 3D on
 		// that renderer (?gpu=0: none).
 		// And kwshm, for the Wayland desktop (wayland.ts; a resumed session keeps its own too).
+		// WebGPU without an adapter: this boot runs without guest Vulkan (config.ts vkAdapterBlocker()).
+		if (cfg.vk) {
+			const why = await vkAdapterBlocker();
+			if (why) Object.assign(cfg, { vk: false, vkBlocked: why, vkWhy: why });
+		}
 		const glDevices = () => ({
 			gl: cfg.gl && (cfg.glStrictWaits || cfg.glEager ? { ...(cfg.glStrictWaits ? { strictWaits: true } : {}), ...(cfg.glEager ? { eager: true } : {}) } : true),
 			gpu: cfg.gpu,
 			shm,
+			// Guest Vulkan on this thread's WebGPU (Debian, on by default; showVk()): nothing loads
+			// before the guest's first Vulkan instance, and nothing of it is in a snapshot.
+			vk: cfg.vk,
 		});
 		// A session on this load's CPU count (another: offerResumeCpus(), above).
 		const resume = await offerResume(session, dataDisks);
@@ -1598,11 +1698,11 @@ export function start(): void {
 			if (resume) {
 				try {
 					vm = await create(resume.snap);
-					resumed = { note: resumedNote(ago(resume.meta.saved)), saved: resume.meta.saved, screen: resume.meta.screen, preview: resume.meta.preview ?? null, windows: resume.meta.windows, win: resume.meta.win };
+					resumed = { note: resumedNote(agoSince(resume.meta.saved)), saved: resume.meta.saved, screen: resume.meta.screen, preview: resume.meta.preview ?? null, windows: resume.meta.windows, win: resume.meta.win };
 					interacted = true; // it was worth saving
 					resumedSaved = resume.meta.saved;
 					if (resume.meta.screen) screenTail.push(resume.meta.screen);
-					ui.check("session", "Suspended session", "pass", `resumed (saved ${ago(resume.meta.saved)})`, `${fmtMiB(resume.meta.bytes)}; saved ${cfg.worker === resume.meta.worker ? "in this mode" : resume.meta.worker ? "in worker mode" : "inline"}`);
+					ui.check("session", "Suspended session", "pass", `resumed (saved ${agoSince(resume.meta.saved)})`, `${fmtMiB(resume.meta.bytes)}; saved ${cfg.worker === resume.meta.worker ? "in this mode" : resume.meta.worker ? "in worker mode" : "inline"}`);
 				} catch (e) {
 					const why = (e as Error)?.message ?? String(e);
 					// Several CPUs that did not start (the worker, its CPU threads; not a refusal of a disk or
@@ -1709,6 +1809,7 @@ export function start(): void {
 		};
 		showJit();
 		showGl(vm);
+		showVk(vm);
 
 		// Not fatal, but worth flagging: the kernel started and printed nothing.
 		const bootTime = inst ? inst.kernel.bootTime : performance.now();
@@ -1724,8 +1825,8 @@ export function start(): void {
 		if (resumed) {
 			markRunning("resumed"); // the guest prints nothing by itself
 			reopenPreview(vm, resumed.preview);
-			// Terminal windows 1-9: their sessions wait detached in the guest (windows.ts).
-			if (Array.isArray(resumed.windows)) windows.reattach(resumed.windows, resumed.win);
+			// Terminals 1-9: their sessions wait detached in the guest (wterms.ts).
+			if (Array.isArray(resumed.windows)) terminals.reattach(resumed.windows, resumed.win);
 			// Every resume says so, the same way (a machine that went on in place, never stopped, says nothing).
 			sayResumed(resumed.saved);
 		}
@@ -1734,14 +1835,14 @@ export function start(): void {
 		unquiet(); // it ended before the screen was restored
 		attachPreview(null); // previews now get 503
 		stopWayland?.();
-		stopWindows(`the kernel stopped (${res.kind})`);
+		stopTerminals(`the kernel stopped (${res.kind})`);
 		if (holdState) {
 			// Held, the session saved: stopped after AUTO_SUSPEND_HOLD_MS (or by Suspend), or ended otherwise
 			// (its worker died). Nothing is lost: the tab, when shown, resumes the saved session.
 			const h = holdState;
 			holdState = null;
 			await suspending;
-			ui.setState("halted", "Suspended");
+			ui.setState("halted", "Suspended", "stopped");
 			if (pause.ended()) {
 				// Paused by hand: offered as after Suspend (the Resume card), not resumed by itself.
 				if (res.kind !== "stopped" || h.lost) ui.hostLog(`[host] the paused system ended (${res.reason}); its session stays saved`);
@@ -1756,9 +1857,9 @@ export function start(): void {
 		if (suspending && res.kind === "stopped") {
 			// The kernel stops only once the session is saved; failed: it was stopped meanwhile by something else.
 			const failed = await suspending;
-			ui.setState("halted", failed ? "Stopped" : "Suspended");
+			ui.setState("halted", failed ? "Stopped" : "Suspended", failed ? null : "stopped");
 			// The machine is lost: say so, in red.
-			if (failed) KW.term!.notice(`[host] the kernel stopped while it was being suspended, and the session was not saved (${failed}) — use Reboot in the status panel to start again`);
+			if (failed) KW.term!.notice(`[host] the kernel stopped while it was being suspended, and the session was not saved (${failed}) — use Reboot in the top bar's Control Center to start again`);
 			else if (auto.state !== "saving" && auto.state !== "done") {
 				ui.setSuspended(suspendedBytes); // the Resume card
 				write(`\r\n${okLine("Suspended — Resume (or reload the page) to continue")}\r\n`);
@@ -1781,7 +1882,7 @@ export function start(): void {
 			}
 			ui.setState("halted", label);
 			const why = res.code === 2 ? ` (restart requested ${AUTO_REBOOT_MAX} times within a minute, so not rebooting on its own)` : "";
-			KW.term!.notice(`[host] ${label.toLowerCase()}${why} — use Reboot in the status panel to start again`);
+			KW.term!.notice(`[host] ${label.toLowerCase()}${why} — use Reboot in the top bar's Control Center to start again`);
 			return;
 		}
 		const titles: Record<string, string> = { panic: "Kernel panic", trap: "WebAssembly trap in the kernel", fatal: "Host runtime error" };
@@ -1790,7 +1891,7 @@ export function start(): void {
 
 	boot().catch((e: StageError) => {
 		console.error(e);
-		stopWindows("the boot failed");
+		stopTerminals("the boot failed");
 		unquiet();
 		failed(e.kind === "distro" ? `Open the ${cfg.guest} image` : STEP[e.stageId ?? ""] ?? "Boot");
 		if (e.stageId) ui.stage(e.stageId, "fail", e.message);

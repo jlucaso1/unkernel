@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 /*
  * kwtty: terminal sessions over AF_VSOCK (static aarch64 musl),
- * /usr/bin/kwtty in the Alpine initramfs, started by inittab as
- * "::respawn:/usr/bin/kwtty serve". The host side is js/core/tty.ts.
+ * `kwbox tty` in the base's kw layer (kwbox.c), started by inittab as
+ * "::respawn:/usr/bin/kwbox tty serve". The host side is
+ * js/core/tty.ts.
  *
  *   kwtty serve [PORT]   serve the host (CID 2) on PORT (default 1022, so
  *                        only root can bind it); without a vsock device
@@ -135,6 +136,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -500,9 +502,17 @@ static int find_account(const char *spec, struct account *a)
  * In the child, before exec: give the terminal on fd 0 (if it is one) to
  * the account, as login(1) does (owner, group tty, 0620), then take the
  * account's groups and ids. 0, or -errno.
+ *
+ * The session may also raise its threads' priority as far as nice -20
+ * (RLIMIT_NICE 40, soft and hard), as pam_limits lets a desktop's audio
+ * users; these sessions do not go through PAM. SDL asks for nice -20 for
+ * its audio thread, which at nice 0 shares the emulated CPU with the
+ * program's other busy threads and misses its periods (ALSA underruns,
+ * gaps in the sound). Best effort: a failure leaves the inherited limit.
  */
 static int become(const struct account *a)
 {
+	static const struct rlimit renice = { 40, 40 };
 	struct group *tty;
 
 	if (isatty(0)) {
@@ -510,6 +520,7 @@ static int become(const struct account *a)
 		if (fchown(0, a->uid, tty ? tty->gr_gid : a->gid) || fchmod(0, 0620))
 			return -errno;
 	}
+	setrlimit(RLIMIT_NICE, &renice);
 	if (initgroups(a->name, a->gid) || setgid(a->gid) || setuid(a->uid))
 		return -errno;
 	return 0;
@@ -541,13 +552,23 @@ static void env_set(char **env, int *n, char *kv)
 	env[(*n)++] = kv;
 }
 
+/* Every signal at its default and none blocked, whatever init passed on. */
+static void default_signals(void)
+{
+	struct sigaction sa = { .sa_handler = SIG_DFL };
+	sigset_t none;
+
+	for (int i = 1; i < _NSIG; i++)
+		sigaction(i, &sa, NULL);
+	sigemptyset(&none);
+	sigprocmask(SIG_SETMASK, &none, NULL);
+}
+
 /* The program, in the child: the pty or the pipes are its stdio already. */
 static void __attribute__((noreturn))
 shell_child(int ep, const struct account *a, const char *file, char **argv, char **env)
 {
-	struct sigaction sa = { .sa_handler = SIG_DFL };
 	struct termios t;
-	sigset_t none;
 	int e;
 
 	/* A negative number on the error pipe: becoming the account failed. */
@@ -557,10 +578,7 @@ shell_child(int ep, const struct account *a, const char *file, char **argv, char
 		_exit(127);
 	}
 
-	for (int i = 1; i < _NSIG; i++)
-		sigaction(i, &sa, NULL);
-	sigemptyset(&none);
-	sigprocmask(SIG_SETMASK, &none, NULL);
+	default_signals();
 	if (!tcgetattr(0, &t)) {
 		t.c_iflag |= IUTF8;
 		tcsetattr(0, TCSANOW, &t);
@@ -1861,7 +1879,7 @@ static void __attribute__((noreturn)) session(int s)
 
 static int usage(void)
 {
-	fprintf(stderr, "usage: kwtty serve [PORT] | kwtty login\n");
+	fprintf(stderr, "usage: kwbox tty serve [PORT] | kwbox tty login\n");
 	return 2;
 }
 
@@ -1914,6 +1932,7 @@ static int login(void)
 		goto fail;
 	argv[1] = NULL;
 	environ = env;
+	default_signals();
 	execv(a.shell, argv);
 	fprintf(stderr, "kwtty login: exec %s: %s\n", a.shell, strerror(errno));
 fail:

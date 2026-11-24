@@ -16,7 +16,7 @@ kwemu. The guest runs stock Mesa with the `virgl` driver; the host runs
 virglrenderer compiled to wasm against one WebGL2 context.
 
 ```
-vtest: app -> Mesa virgl (virpipe) -> /tmp/.virgl_test -> /usr/lib/kw/vtest-bridge
+vtest: app -> Mesa virgl (virpipe) -> /tmp/.virgl_test -> kwbox vtest
        -> kwvsock, host CID 2, port 1019 -> VsockHost -> StreamHost
 DRM:   app -> Mesa virtio_gpu (virgl) -> /dev/dri/renderD128 -> virtio_gpu
        -> kwvirtio -> VirtioGpu + VirglGpuBackend -> GpuRenderer
@@ -162,6 +162,16 @@ In order, each with its reason in the commit message:
     and the unit stays empty; nor transferred (Mesa resolves first).
     Step m (`test/gpu/msaa.c`, 2026-11-22). The GL blitter's resolve
     path is not reached by any test.
+18. a deleted-key marker that no id can equal in `util_hash_table`: its
+    keys are ids cast to pointers (object handles, resource and context
+    ids), and Mesa's hash table marks a deleted slot with a static
+    variable's address, which on wasm32 is a small number (62592 in one
+    build), so the object with that handle was never found. Mesa's virgl
+    numbers objects from one counter, about one a frame for a KMS client,
+    so glmark2-es2-drm's whole run failed in its 31st scene (`Illegal
+    surface 62592`, then every draw of the context; 2026-11-22, the full
+    run by `unkernel-check.mjs --drm --cmd`, 0 errors since). The marker
+    is UINTPTR_MAX, refused as a key.
 
 ## Single GL context
 
@@ -231,6 +241,15 @@ is made up at three levels, the shim first:
     `getBufferSubData` unless all of it is invalidated), written back by
     `bufferSubData` at unmap or flush: buffer upload and readback,
     stride-0 vertex attributes.
+  - **Uniform buffer sizes.** WebGL refuses a draw whose uniform buffer
+    range is smaller than its block (`UNIFORM_BLOCK_DATA_SIZE`), which
+    desktop drivers allow and vrend passes on as the guest bound it.
+    `kw_glBindBufferRange` rounds a uniform range up to 16 bytes (an std140
+    block's size is a multiple of 16) and `kw_glBufferData` rounds every
+    buffer vrend allocates the same way, so a range short of only its
+    trailing padding draws: SuperTuxKart 1.4 (Matrices, 592 bytes in a
+    584-byte buffer), whose context otherwise went into error at its first
+    3D draw.
   - **Indexed blend and colour mask** on `OES_draw_buffers_indexed`, whose
     GLES name vrend's feature check finds in emscripten's extension list.
   - **Base vertex and base instance draws**:
@@ -531,10 +550,11 @@ GPU). One run each, on the shared host:
   (Loading on first use). Node: ignored with a log line (no
   OffscreenCanvas), unless `gl.renderer` gives a renderer object (the
   relay works there).
-- **Guest** (`/usr/lib/kw/vtest-bridge`, kernel/guest.md): the bridge
+- **Guest** (`kwbox vtest`, kernel/guest.md): the bridge
   built stream-only, in the base's kw layer (in the bundle, so it always
-  matches the SDK that speaks its link; 67 KB of RAM-resident layer for
-  every distro, Alpine included, which cannot use it). The SDK starts it
+  matches the SDK that speaks its link; 12 KB of the layer's kwbox,
+  RAM-resident for every distro, Alpine included, which cannot use it;
+  67 KB as a program of its own). The SDK starts it
   through kwtty as root once the renderer is up (`bridge --link
   vsock:2:1019 --daemon`); it makes `/tmp/.virgl_test` mode 0666 when the
   host sends READY (at once: the renderer is not needed for that), and
@@ -641,8 +661,8 @@ gives the DRM nodes udev's groups and modes (kernel/guest.md).
   kind.
   Page flips are paced by virtio-gpu's emulated vblank (60 Hz).
 - **Display size**: the connector's preferred (and only) mode is the
-  display option's size (the page: its stage), from the device's EDID.
-  `vm.updateDisplaySize()` (the page calls it 300 ms after the stage last
+  display option's size (the page: its Display window's box), from the device's EDID.
+  `vm.updateDisplaySize()` (the page calls it 300 ms after that box last
   changed) gives a running guest a hotplug with the new mode
   (kernel/devices.md, js.md); the display and the page's canvas follow
   the mode a client sets, never the size asked. Who switches: KMS
@@ -650,8 +670,8 @@ gives the DRM nodes udev's groups and modes (kernel/guest.md).
   kmscube and glmark2-es2-drm at their next start; X only by `xrandr`
   (a plain `xrandr` probes, then `xrandr --output Virtual-1 --auto`; a
   bare `--auto` turned the output off, 2026-11-22), since its modesetting
-  driver hears hotplugs from udev, which the guest has not: the xglamor
-  demo runs a follower (perl on netlink, then those two). No fbdev
+  driver hears hotplugs from udev, which the guest has not: the X + glamor
+  app (`apps/xkms.ts`) runs a follower (perl on netlink, then those two). No fbdev
   emulation on DRM (DRM_FBDEV_EMULATION is off); kwfb takes a new size at
   its next first open.
 - **dmabuf**: PRIME export and import between openers of the device is the
@@ -998,7 +1018,7 @@ kept contexts and two renewals against fake renderers.
 
 ## The page
 
-Guest GL (Options: Guest GL; on by default on Debian where the display
+Guest GL (Settings > Display and sound; on by default on Debian where the display
 is, `?gl=0` off; web.md, Guest GL) boots with `gl: true` and `gpu: true`,
 where the page's build has the renderer and the page's thread has WebGL2;
 otherwise the option is disabled with the reason. `?gpu=0` (this load
@@ -1015,7 +1035,7 @@ render node, so plain `eglinfo` or `glmark2-es2` uses virgl: through
 `/dev/dri` with the device, through the vtest link without (with the
 device, `GALLIUM_DRIVER=virpipe LIBGL_ALWAYS_SOFTWARE=1 cmd` takes the
 vtest link for one program). KMS clients (kmscube, glmark2-es2-drm) show
-on the page's display (Display.tsx, `vm.gl.gpu.drawFrame()`). The Environment tab's Guest GL row says
+on the page's display (Display.tsx, `vm.gl.gpu.drawFrame()`). The Guest GL row in System > Environment says
 "on, not loaded yet" until the guest's first GL use, then names the
 WebGL2 renderer (unmasked; a software one, SwiftShader, llvmpipe or WARP,
 is a warning and a toast) and how long the load took and `vm.gl.stats` with the per-readback
@@ -1054,7 +1074,7 @@ fbdev driver on kwfb, `sudo Xorg :0`, then `DISPLAY=:0 glmark2-es2`) and
 its frame rate (kwfb is read about 50 times a second, at most about 1M
 pixels); the device on several CPUs; packages
 kept across reloads on the data disk. By hand on GPUs (2026-11-22): the
-launcher's kmscube, glmark2 and X + glamor demos (web.md, Launcher) work
+launcher's kmscube, glmark2 and X + glamor apps (web.md, Launcher) work
 in Chrome, Safari and Firefox.
 
 ## Testing

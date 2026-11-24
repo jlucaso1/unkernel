@@ -6,28 +6,34 @@
 // failure), 2 restart, 124 --timeout, 253 panic, 254 wasm trap, 255 fatal.
 
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import * as nodeModule from "node:module";
 import { createServer, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { BlockDevice } from "./core/block.ts";
 import type { DiskSpec, NetSpec } from "./core/devices.ts";
-import { frameToPpm, type DisplayMode } from "./core/display.ts";
-import { BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, domCodeToLinux, type InputState } from "./core/input.ts";
-import { KernelInstance, createKernelOn, type KernelHandle } from "./core/instance.ts";
-import { decodeSnapshot, encodeSnapshot, type KernelSnapshot } from "./core/snapshot.ts";
-import { bundledBoot, moduleIsMemory64, type ExitResult } from "./core/kernel.ts";
-import { smpKernelFromBundle } from "./core/kpatch.ts";
+import type { DisplayMode } from "./core/display.ts";
+import type { InputState } from "./core/input.ts";
+import type { KernelHandle } from "./core/instance.ts";
+import type { KernelSnapshot } from "./core/snapshot.ts";
+import type { ExitResult } from "./core/kernel.ts";
 import type { MountsOption } from "./core/mounts.ts";
-import { NetStack } from "./core/net.ts";
-import { formatProfile, symbolizeProfile, type ProfileOptions } from "./core/profile.ts";
+import type { ProfileOptions } from "./core/profile.ts";
 import type { JitStats, KwemuStats } from "./core/jit.ts";
-import { createImageFromKwsparse, openDisk } from "./node/disk.ts";
-import { distroFetcher, isCheckout, type FetchDistroProgress } from "./node/distro-fetch.ts";
-import { directBackend, wispBackend } from "./node/net.ts";
-import { nodeFs } from "./node/nodefs.ts";
-import { nodePlatform } from "./node/platform.ts";
-import { cliSound } from "./node/sound.ts";
-import { serveWasiPrograms } from "./node/wasi.ts";
+import type { FetchDistroProgress } from "./node/distro-fetch.ts";
+
+// Node's compile cache (V8's code cache and, from a checkout, the sources
+// with their types stripped), on before the SDK's modules load: they come in
+// one dynamic import (node/cli-imports.ts), since static imports compile
+// before this runs (this file is stripped every time). A checkout's `node
+// js/cli.ts --help` takes 88-98 ms instead of 155-170 (Node 24.22,
+// 2026-11-22). Not in the SDK: only this entry turns it on.
+nodeModule.enableCompileCache?.();
+const {
+	BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, KernelInstance, NetStack, bundledBoot, cliSound, createImageFromKwsparse, createKernelOn,
+	decodeSnapshot, directBackend, distroFetcher, domCodeToLinux, encodeSnapshot, formatProfile, frameToPpm, isCheckout,
+	moduleIsMemory64, nodeFs, nodePlatform, openDisk, serveWasiPrograms, smpKernelFromBundle, symbolizeProfile, wispBackend,
+} = await import("./node/cli-imports.ts");
 
 // Next to this file, like the Node entry's (this module is an entry too, so
 // the URLs stay relative to dist/cli.mjs; in a source checkout js/ has a
@@ -128,7 +134,8 @@ tokens and the sound work with it too. Console and evdev input and frames go
 through shared memory (read by the worker while the kernel runs);
 --worker=messages sends them as messages instead (handled when the kernel
 yields, up to 20 ms while the guest is busy), --worker=shared insists on
-shared memory. PCM and everything else are messages either way.
+shared memory. PCM goes through shared memory too unless --worker=messages;
+everything else is messages either way.
 
 --cpus N gives an SMP kernel (one built with CONFIG_SMP: kw_smp.config)
 N CPUs, each another instance of the kernel in its own thread on a shared
@@ -185,11 +192,12 @@ connection.
 
 --wasi (prototype) runs the guest's WASI programs (wasm32-wasi .wasm files,
 preview 1 or 0, executable, run by path) on this host's wasm engine, each in
-a worker thread of its own: the guest's binfmt_misc hands them to
-/usr/bin/kwwasi, which talks to the host over vsock port 1021 and does the
-program's file I/O in the guest, as that process; killing kwwasi ends the
-program. It needs vsock, and kwwasi registered in the guest (the kw layer's
-/usr/lib/kw/rc does it at boot, also in the base shell).
+a worker thread of its own: the guest's binfmt_misc hands them to kwwasi
+(/usr/lib/kw/kwwasi, a link to kwbox), which talks to the host over vsock
+port 1021 and does the program's file I/O in the guest, as that process;
+killing kwwasi ends the program. It needs vsock, and kwwasi registered in
+the guest (the kw layer's /usr/lib/kw/rc does it at boot, also in the base
+shell).
 
 --shm gives the guest kwshm (/dev/kwshm: guest programs export shmem files to
 the host, which reads and writes their pages in place; the SDK's vm.shm). The

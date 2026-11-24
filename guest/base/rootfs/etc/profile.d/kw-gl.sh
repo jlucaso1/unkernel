@@ -8,7 +8,7 @@
 # sets nothing. Without one, it points Mesa at the vtest link: its virgl
 # driver over vtest (GALLIUM_DRIVER=virpipe; LIBGL_ALWAYS_SOFTWARE=1 makes
 # GLX and EGL take Mesa's software path, where GALLIUM_DRIVER picks the
-# driver) to /tmp/.virgl_test, the socket of /usr/lib/kw/vtest-bridge.
+# driver) to /tmp/.virgl_test, the socket of kwbox vtest.
 # `GALLIUM_DRIVER=virpipe LIBGL_ALWAYS_SOFTWARE=1 cmd` runs one program on
 # the vtest link with the device there too; `GALLIUM_DRIVER=llvmpipe cmd`
 # (vtest) or `LIBGL_ALWAYS_SOFTWARE=1 cmd` (DRM) on llvmpipe instead.

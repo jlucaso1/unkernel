@@ -21,6 +21,7 @@ import { fetchOver } from "./http.ts";
 import { CommandTable, parseCommands, type CommandsOption, type HostCommand } from "./commands.ts";
 import { MountTable, parseMounts, snapshotMountMismatch, type FsSource, type Mount, type MountOptions, type MountsOption } from "./mounts.ts";
 import { prepareGl, startGl, type GlHost, type GlOption } from "./gl.ts";
+import { prepareVk, startVk, type VkHost, type VkOption, type VkPlatform } from "./vk.ts";
 import { inlineGpuLink, VirglGpuBackend } from "./gl-gpu.ts";
 import { Kernel, bundledBoot, moduleIsMemory64, type ExitResult, type KernelStats, type MemoryStage, type NetDevice } from "./kernel.ts";
 import { BootError, loadBytes, loadKernelModule, type BytesSource, type DownloadProgress, type KernelSource } from "./load.ts";
@@ -217,7 +218,8 @@ export interface CreateKernelOptions {
 	/**
 	 * Host commands (commands.ts): names to functions of the host that the
 	 * guest runs as programs. Each gets a link /run/kw/bin/NAME to the
-	 * guest's kwcmd (first on PATH), made through kwtty once it answers; a
+	 * guest's kwbox, which runs kwcmd (first on PATH; not "kwcmd" or "kwbox"),
+	 * made through kwtty once it answers; a
 	 * guest process that runs NAME is a normal process, and the function is
 	 * called with its arguments, environment, stdin, stdout and stderr, and
 	 * what it returns ends that process. spawn() and exec() wait for the
@@ -233,7 +235,7 @@ export interface CreateKernelOptions {
 	 * module (virgl.mjs and virgl.wasm next to the web entry) is fetched only
 	 * with `gl`, and only on the guest's first GL use (`gl.eager`: before the
 	 * boot); the host listens on vsock port 1019 and starts the guest's
-	 * forwarder (/usr/lib/kw/vtest-bridge) through kwtty, after which GL
+	 * forwarder (`kwbox vtest`) through kwtty, after which GL
 	 * programs run with GALLIUM_DRIVER=virpipe LIBGL_ALWAYS_SOFTWARE=1
 	 * (Debian: Mesa from apt). true, or options. Needs vsock and WebGL2:
 	 * where there is none (Node) it is ignored with a log line, unless
@@ -241,6 +243,18 @@ export interface CreateKernelOptions {
 	 * device 3D (see gpu). Default false.
 	 */
 	gl?: GlOption;
+	/**
+	 * Guest Vulkan (vk.ts, vk/PROTOCOL.md): the guest's ICD
+	 * (/usr/lib/kw/libvulkan_kw.so, found by the Vulkan loader through
+	 * /usr/share/vulkan/icd.d/kw_icd.json) sends Vulkan over vsock port 1021
+	 * to a renderer on this thread's WebGPU device; SPIR-V is translated to
+	 * WGSL by kwvk-naga.wasm (next to the web entry). The device, the
+	 * renderer and the translator load only on the guest's first Vulkan
+	 * instance. true, or options. Needs vsock and WebGPU: where there is no
+	 * navigator.gpu (Node) it is ignored with a log line, unless `vk.device`
+	 * gives a device. Default false.
+	 */
+	vk?: VkOption;
 	/** Initial console size (cols x rows); resize() changes it later. */
 	consoleSize?: { cols: number; rows: number };
 	/** Console output, from the first byte. */
@@ -320,7 +334,8 @@ export interface WorkerOption {
 	/**
 	 * Worker mode with `restore`: hand the snapshot's memory buffer to the
 	 * worker instead of copying it (about 150 ms per 512 MiB), for a
-	 * snapshot that is used once; its `memory` is detached then. Default false.
+	 * snapshot that is used once; its `memory` is detached then (one of
+	 * 2 GiB or more is shared with the worker instead). Default false.
 	 */
 	transferRestore?: boolean;
 }
@@ -374,6 +389,8 @@ export interface Platform {
 	spawnSampler?: (init: SamplerInit) => SamplerHandle;
 	/** The wasm GL renderer's module (virgl.mjs, the `gl` option); without it `gl` needs a module or a renderer. */
 	glModule?: () => URL;
+	/** The guest Vulkan renderer (the `vk` option): its modules and the translator's wasm (kwvk-naga.wasm); web entry only. */
+	vk?: () => VkPlatform;
 }
 
 /**
@@ -523,6 +540,8 @@ export interface KernelHandle {
 	readonly transport: KernelTransport;
 	/** With the gl option, where it could start: the renderer's host side (ready, stats); it runs on this thread in both modes. */
 	readonly gl: GlHost | undefined;
+	/** With the vk option, where it could start: the Vulkan renderer's host side (status, stats); on this thread in both modes. */
+	readonly vk: VkHost | undefined;
 }
 
 function isBackend(n: NetDevice | NetBackend): n is NetBackend {
@@ -554,6 +573,7 @@ export class KernelInstance implements KernelHandle {
 	#mounts = new MountTable(undefined, () => {});
 	#commands = new CommandTable(undefined, () => {});
 	#gl: GlHost | undefined;
+	#vk: VkHost | undefined;
 
 	/** @internal Use createKernel(). */
 	constructor(kernel: Kernel, module: WebAssembly.Module, cmdline: string, net: NetDevice | undefined, compileMs: number) {
@@ -566,6 +586,7 @@ export class KernelInstance implements KernelHandle {
 		if (kernel.shm.enabled) this.#shm = inlineShm(kernel.shm);
 		this.exited = kernel.exited.then((res) => {
 			this.#gl?.shutdown();
+			this.#vk?.shutdown();
 			this.#commands.shutdown();
 			this.#mounts.shutdown();
 			this.#vsock?.shutdown();
@@ -623,6 +644,17 @@ export class KernelInstance implements KernelHandle {
 	/** With the gl option: the GL renderer's host side (gl.ts), or undefined. */
 	get gl(): GlHost | undefined {
 		return this.#gl;
+	}
+
+	/** @internal createKernel's `vk`, once the kernel runs. */
+	attachVk(vk: VkHost | undefined): void {
+		this.#vk = vk;
+		if (vk && this.kernel.result) vk.shutdown();
+	}
+
+	/** With the vk option: the Vulkan renderer's host side (vk.ts), or undefined. */
+	get vk(): VkHost | undefined {
+		return this.#vk;
 	}
 
 	/** createKernel's `mounts` and `commands` first (see KernelHandle.spawn()). */
@@ -934,12 +966,15 @@ export async function createKernelOn(platform: Platform, opts: CreateKernelOptio
 	// gl (and gpu): before the boot, as the device offers virgl when the driver probes; the renderer
 	// itself loads on the guest's first GL use unless gl.eager (gl.ts).
 	const glPrep = prepareGl(opts.gl, !!opts.gpu, !!vopt && !raw, platform.glModule?.(), opts.log ?? ((m: string) => console.error(m)), !!opts.restore);
+	// vk: nothing loads before the guest's first Vulkan instance (vk.ts).
+	const vkPrep = prepareVk(opts.vk, !!vopt && !raw, platform.vk?.(), opts.log ?? ((m: string) => console.error(m)));
 	if (opts.worker) {
 		checkWorkerOptions(platform, opts);
 		const vm = await createKernelInWorker(platform, opts, progress, glPrep?.gpu);
 		vm.startMounts(mounts);
 		vm.startCommands(commands);
 		vm.attachGl(startGl(glPrep, vm.vsock, opts.log ?? ((m: string) => console.error(m))));
+		vm.attachVk(startVk(vkPrep, vm.vsock, opts.log ?? ((m: string) => console.error(m))));
 		return vm;
 	}
 	const loadOpts = { signal, readFile: platform.readFile, onProgress: progress };
@@ -1059,6 +1094,7 @@ export async function createKernelOn(platform: Platform, opts: CreateKernelOptio
 	instance.startMounts(rest);
 	instance.startCommands(commands);
 	instance.attachGl(startGl(glPrep, vsock, log));
+	instance.attachVk(startVk(vkPrep, vsock, log));
 	if (signal) {
 		const onAbort = () => instance.stop({ code: 130, reason: "aborted" });
 		if (signal.aborted) onAbort();

@@ -37,6 +37,7 @@
 //   as root (sudo.ts). Failures are logged and otherwise ignored.
 
 import { backendConnect } from "./download.ts";
+import { fmtMiB } from "./format.ts";
 import { DEFAULT_WISP_SERVERS, fetchOver, wispBackend, type GuestConnect, type KernelHandle } from "./sdk.ts";
 import { execAsRoot } from "./sudo.ts";
 
@@ -144,8 +145,6 @@ async function getIndex(cache: Cache | null, http: URL, connect: () => GuestConn
 	await cache?.put(key, new Response(bytes.slice(), { headers: stored })).catch(() => {}); // a full quota only loses the cache
 	return { bytes, validated: now, source };
 }
-
-const fmtMiB = (n: number) => `${(n / 1048576).toFixed(1)} MiB`;
 
 /**
  * Push fresh apk indexes into the guest (see the top of this file). Resolves

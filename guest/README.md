@@ -28,8 +28,8 @@ kernel/build.sh distro [NAME...]     # the same as guest/build.sh distro
 | `lib/` | bash, sourced only: `env.sh` (paths, `cc_guest`; sources `kernel/tools/env.sh`), `stage.sh` (`distro_unpack`, `install_tree`, `install_common`, `install_user`, `install_readme`), `image.sh` (`distro_images`: the erofs and ext4 images) |
 | `common/` | what every distro image has from a source of its own: `README` (the user's `/home/user/README`, rendered per distro by `install_readme`: `@KEY@` values, `@if DISTRO` ... `@end` blocks) |
 | `tools/` | host tools: `mkcpio.py` (cpio archives), `mktree.py` (an image's tar stream and id), `erofs-utils.sh` (pinned mkfs.erofs, with `erofs-utils-patches/`), `erofs-trace.py` (the files a traced boot read), `distros-json.mjs` (the index), `vm-run.ts` (run a command in an image at build time); `pins.sh` (erofs-utils, lz4, zstd) |
-| `src/` | the guest programs in the base's kw layer: `kwtty`, `kw9p`, `kwvsock`, `kwshm`, `kwwasi`, `kwcmd`; `glimmer`, which every distro image gets (`install_common`, `lib/stage.sh`); `src/test/`: `kwtest`, `kwbench`, `abitest` (base-test.cpio) |
-| `base/` | `build.sh`, `pins.sh` (static busybox), `initramfs/` (the cpio root: `/init`, the base shell), `rootfs/` (the kw layer, `/kw/layer`: on top of every distro's root) |
+| `src/` | the guest programs in the base's kw layer: `kwtty`, `kw9p`, `kwvsock`, `kwshm`, `kwwasi`, `kwcmd`, linked as one program with `kwbox.c` (`/usr/bin/kwbox`: `kwbox TOOL ARGS`); `glimmer`, which every distro image gets (`install_common`, `lib/stage.sh`); `src/test/`: `kwtest`, `kwbench`, `abitest` (base-test.cpio) |
+| `base/` | `build.sh`, `pins.sh` (static busybox), `initramfs/` (the cpio root: `/init`, the base shell), `rootfs/` (the kw layer, `/kw/layer`: on top of every distro's root; `build.sh` adds guest Vulkan's ICD to it from `vk/icd/build.sh`: `/usr/lib/kw/libvulkan_kw.so` and `/usr/share/vulkan/icd.d/kw_icd.json`) |
 | `distro/NAME/` | `build.sh`, `pins.sh`, `rootfs/` (files added to the image); Debian: `tools/` (apt-lz4) |
 
 `distros.json` (written by `guest/build.sh distro` and `index`, and
@@ -39,7 +39,7 @@ refreshed by `kernel/build.sh base`, `kernel`, `smp`, `lower` and
 release publishes it with the images and the bundle:
 
 ```json
-{ "abi": 3, "base": "base-<hash>",
+{ "abi": 4, "base": "base-<hash>",
   "distros": [{ "name": "alpine", "file": "alpine.erofs", "size": 4317184, "sha256": "<hex>", "image": "alpine-3.24.4-<hash>" }] }
 ```
 
@@ -61,7 +61,9 @@ base id (`/kw/layer/usr/lib/kw-base`), `image` the image id from `NAME.id`.
   `/usr/lib/kw/`, so the kw layer never shadows a distro's file. The kw
   layer is RAM-resident: keep it small. Its scripts run the base's busybox
   (`#!/run/kw-lower/bin/busybox sh`), so they work on any distro, and only
-  gain features (a distro image may meet a newer base).
+  gain features: a distro image may meet a newer base, but an image from
+  before kwbox (its init runs `/usr/bin/kwtty`) gets the base shell on a
+  base with it, which says why (.agents/kernel/guest.md, Guest tools).
 - Build scripts are `build.sh`, pins `pins.sh`; pins live next to their
   owner (`kernel/build.sh` keeps the kernel's and the toolchain's).
 - Builds are reproducible: an identical rebuild gives byte-identical
@@ -78,7 +80,8 @@ base id (`/kw/layer/usr/lib/kw-base`), `image` the image id from `NAME.id`.
   laid out so that a boot's reads are one piece at its front: all inodes
   and directories, then the data of the files a boot to the prompt and a
   first exec reads (found by booting an uncompressed image of the same
-  tree, `tools/vm-run.ts --trace`, the same set in every boot so far),
+  tree as the page boots it, with kwshm and `kw.wayland=1`, `tools/vm-run.ts
+  --trace`, the same set in every boot so far),
   then those of the distro's warm set (what the first commands after the
   prompt read, `KW_WARM_SCRIPT` in its build.sh: Debian's apt; the list
   `distro/NAME/warm-files`), both without fragments, then the rest
@@ -128,8 +131,8 @@ UNKERNEL_TEST_KERNEL=/tmp/b/unkernel.wasm UNKERNEL_TEST_DISTRO_DIR=/tmp/d pnpm t
    links to), or `/usr/local/sbin/kw-init`, which the base execs first
    (where a package manager may replace `/sbin/init`: Debian). The base has mounted `/dev`, `/proc`, `/sys`, `/run`, `/tmp`
    and `/data`; init runs `/usr/lib/kw/rc`, `/usr/lib/kw/welcome` and
-   `/usr/lib/kw/net`, keeps `/usr/bin/kwtty login` on hvc0 (the console's
-   shell, as the image's user) and `/usr/bin/kwtty serve` running, and at
+   `/usr/lib/kw/net`, keeps `/usr/bin/kwbox tty login` on hvc0 (the console's
+   shell, as the image's user) and `/usr/bin/kwbox tty serve` running, and at
    poweroff stops every process and runs `/usr/lib/kw/shutdown` before
    reboot(2) (Debian's `kw-init` is a small example; `poweroff` must work
    for the user, through `sudo -n`). The build gives the image sudo (or a

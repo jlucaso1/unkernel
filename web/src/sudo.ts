@@ -9,7 +9,7 @@
 //   runs as root or there is no sudo. run.sh starts with it and runs the
 //   steps that need root as `$SUDO cmd` (launcher.ts prints them as
 //   `sudo cmd`, or as `cmd` where $SUDO is empty), and so does a script
-//   that installs packages itself (Doom's fbdoom).
+//   that installs packages itself.
 // - execAsRoot() is vm.exec() of a script as root, through `sudo -n` (which
 //   fails instead of waiting for a password) where that is needed.
 // A redirection in a script run as `$SUDO cmd > file` is the caller's, so

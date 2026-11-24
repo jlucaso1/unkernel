@@ -435,9 +435,10 @@ smp_bundle_args() {
 }
 
 # A single-file kernel (the 32-bit-memory build) with the base initramfs
-# (gzipped), its command line, the data disk template and the patch to the
-# SMP kernel bundled in custom sections; the runtime boots it when given no
-# initrd of its own.
+# (uncompressed: the kernel unpacks it about 10 ms faster, for about 0.75
+# MiB more raw bundle; drop --no-gzip to gzip it), its command line, the
+# data disk template and the patch to the SMP kernel bundled in custom
+# sections; the runtime boots it when given no initrd of its own.
 # $1: the bundle's file name (default unkernel.wasm; another name, the
 # stats bundle, gets no SMP patch and no web/kernel/ copy).
 bundle_base() {
@@ -459,7 +460,7 @@ bundle_base() {
 		[ -z "$args" ] || mapfile -t smp <<< "$args"
 	fi
 	node "$root/kernel/tools/bundle.mjs" "$kout/vmlinux32.wasm" "$cpio" -o "$out/$name" \
-		--cmdline "console=hvc0 rdinit=/init" "${dd[@]}" "${smp[@]}"
+		--cmdline "console=hvc0 rdinit=/init" --no-gzip "${dd[@]}" "${smp[@]}"
 	# The page's dev server runs web/kernel/'s copy (web/scripts/kernel.ts).
 	if [ -n "$web" ] && [ "$name" = unkernel.wasm ]; then
 		mkdir -p "$root/web/kernel"

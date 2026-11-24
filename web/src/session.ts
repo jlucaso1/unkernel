@@ -77,15 +77,18 @@ export interface SessionMeta {
 	 * worker checks it.
 	 */
 	distro?: { name: string; url: string } | null;
-	/** The guest preview panel open at the suspend (the store's preview), opened again on resume once its port answers. */
-	preview?: { port: number; path?: string; shown: boolean; fill: boolean } | null;
+	/** The guest preview's Browser window open at the suspend (preview.ts previewState()), opened again on resume once its port answers (minimized if it was; fill: from older records, ignored). */
+	preview?: { port: number; path?: string; shown: boolean; fill?: boolean } | null;
 	/**
-	 * The terminal windows 1-9 open at the suspend whose sessions are in the
-	 * snapshot (windows.ts saved(): number, name, session id), opened and
-	 * attached again on resume; absent in sessions from before them.
+	 * The terminals 1-9 open at the suspend whose sessions are in the
+	 * snapshot (wterms.ts saved(): number, name, session id; the Terminal
+	 * window it was a tab of, from 1 for the console's, and whether it was
+	 * that window's shown tab, both absent in older records: the console's
+	 * window), opened and attached again on resume; absent in sessions from
+	 * before them. Named "windows" (and win below) as records have them.
 	 */
-	windows?: Array<{ n: number; name: string; tty: boolean; id: string }>;
-	/** The window shown at the suspend (0: the console). */
+	windows?: Array<{ n: number; name: string; tty: boolean; id: string; win?: number; shown?: boolean }>;
+	/** The current terminal at the suspend (0: the console), shown again on resume. */
 	win?: number;
 }
 

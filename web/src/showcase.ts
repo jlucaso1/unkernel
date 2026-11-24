@@ -6,18 +6,18 @@
 // near the bottom of the page, clear of the typing at the top (the title
 // cards sit in the middle), launches a demo through launcher.ts (or types
 // into a shell window), waits until it shows what it is about, plays it (keys typed into
-// its terminal, or the evdev keyboard for the display's games), holds it,
+// its terminal, or the evdev keyboard for the display's game), holds it,
 // closes it and goes on. A thin bar along the top shows the progress. It
 // ends on a title card that stays.
 //
 //   ?showcase                   the whole tour (STEPS below, in order)
-//   ?showcase=htop,nvim,doom    only those steps, in the tour's order (step ids:
+//   ?showcase=htop,nvim,git     only those steps, in the tour's order (step ids:
 //                               the demo ids, and intro, shell, launcher, outro)
 //   ?showcase=warm              no captions and no holds: launch each demo, wait
 //                               (up to 15 min) until it is ready, close it. apk
-//                               packages, npm installs and in-guest builds (Doom)
-//                               persist on the data disk, so a later tour does not
-//                               wait on them. Combine as warm,doom,nitro.
+//                               packages and npm installs persist on the data
+//                               disk, so a later tour does not wait on them.
+//                               Combine as warm,nvim,git.
 //
 // While it runs, KW.showcase has skip() (the current step), pause() and
 // resume() (between steps), for the devtools console. The tour does not
@@ -26,10 +26,11 @@
 // step that fails.
 import LOGO_URL from "../../assets/logo.svg";
 import { REPO } from "./config.ts";
-import { DEMOS } from "./demos/index.ts";
+import { APPS } from "./apps/index.ts";
+import { isPageApp } from "./apps/types.ts";
 import { evdev } from "./display.ts";
 import { KW } from "./kw.ts";
-import { demoWindow, launch, setLauncher, unavailable } from "./launcher.ts";
+import { appTerminal, launch, setLauncher, unavailable } from "./launcher.ts";
 import type { KernelHandle } from "./sdk.ts";
 import { ui$ } from "./store.ts";
 
@@ -181,17 +182,17 @@ async function typeAt(n: number, prompt: RegExp, cmds: string[], after = 300): P
 }
 
 /**
- * Close window n without waiting on its programs. close() removes the window
+ * Close terminal n without waiting on its programs. close() removes the terminal
  * at once, before it hangs up: this runs in the background while the next
- * step opens its own window, which may get the same number, so nothing here
+ * step opens its own terminal, which may get the same number, so nothing here
  * may go by n after this first call. (Closing by n after the kill below
- * closed the next step's window: its shell "killed by signal 1".) A hangup
+ * closed the next step's terminal: its shell "killed by signal 1".) A hangup
  * alone can leave a program running (Ubuntu's chroot in its own mount
- * namespace kept the window's connection open), so the window's whole
+ * namespace kept the terminal's connection open), so the terminal's whole
  * session, found by the shell's pid, then gets SIGHUP and SIGKILL. Neither
  * is waited on for more than 2 s.
  */
-async function closeWindow(n: number): Promise<void> {
+async function closeTerminal(n: number): Promise<void> {
 	const pid = KW.windows!.list().find((w) => w.n === n)?.pid;
 	const closed = KW.windows!.close(n);
 	if (pid) {
@@ -206,7 +207,7 @@ async function closeWindow(n: number): Promise<void> {
 // --- driving the display's keyboard (evdev) --------------------------------------
 
 /** Linux input key codes (linux/input-event-codes.h). */
-const KEY = { esc: 1, enter: 28, ctrl: 29, space: 57, up: 103, left: 105, right: 106, down: 108 };
+const KEY = { enter: 28, space: 57, up: 103, left: 105, right: 106, down: 108 };
 
 async function press(code: number, ms = 90): Promise<void> {
 	const ev = evdev();
@@ -228,26 +229,10 @@ async function playGlimmer(ms: number): Promise<void> {
 	}
 }
 
-/** Doom: the menu to a new game (Esc opens it, Enter picks New Game, the episode, the skill), then a short walk with some shooting. */
-async function playDoom(ms: number): Promise<void> {
-	await wait(600);
-	await press(KEY.esc);
-	for (let i = 0; i < 3; i++) { await wait(450); await press(KEY.enter); }
-	await wait(900);
-	const end = performance.now() + ms;
-	const moves: [number, number][] = [[KEY.up, 1400], [KEY.right, 350], [KEY.up, 900], [KEY.left, 500], [KEY.up, 1200], [KEY.right, 700]];
-	for (let i = 0; performance.now() < end; i++) {
-		const [k, t] = moves[i % moves.length]!;
-		await press(k, t);
-		for (let j = 0; j < 2; j++) { await press(KEY.ctrl, 120); await wait(220); }
-		if (i % 3 === 2) await press(KEY.space); // doors
-	}
-}
-
 // --- steps -----------------------------------------------------------------------
 
 interface DemoStep {
-	/** A demo id from demos/; also the step's id. */
+	/** A terminal app's id (apps/); also the step's id. */
 	demo: string;
 	title: string;
 	sub?: string;
@@ -277,7 +262,7 @@ let warmOnly = false;
 
 /** Launch a demo (keeping the URL as it is), wait for it, play it, hold it, close it. */
 async function demo(s: DemoStep, chapter: string): Promise<void> {
-	const d = DEMOS.find((x) => x.id === s.demo);
+	const d = APPS.find((x) => x.id === s.demo && !isPageApp(x));
 	if (!d) return log(`no demo ${s.demo}, skipped`);
 	const why = unavailable(d);
 	if (why) return log(`${s.demo}: ${why}, skipped`);
@@ -288,16 +273,16 @@ async function demo(s: DemoStep, chapter: string): Promise<void> {
 		// With ports this resolves once the preview is open (or failed); else once the window runs.
 		const timeout = warmOnly ? 900_000 : s.timeout ?? 30_000;
 		await Promise.race([launched = launch(d), wait(timeout)]);
-		const win = demoWindow(d);
-		if (!win) return log(`${s.demo}: no window, skipped`);
+		const term = appTerminal(d);
+		if (!term) return log(`${s.demo}: no window, skipped`);
 		const ok = await until(async () =>
-			(!s.ready || s.ready.test(KW.windows!.text(win.n))) &&
+			(!s.ready || s.ready.test(KW.windows!.text(term.n))) &&
 			(!s.display || ui$().get().display.attached) &&
 			(!s.proc || await running(s.proc)), timeout);
 		log(`${s.demo}: ${ok ? "ready" : "not ready, skipped (run ?showcase=warm first)"} after ${((performance.now() - t0) / 1000).toFixed(1)} s`);
 		if (ok && !warmOnly) {
 			await wait(s.display ? 300 : 100); // let it draw
-			if (s.play) await s.play(win.n);
+			if (s.play) await s.play(term.n);
 			await wait(s.hold ?? 2500);
 		}
 	} finally {
@@ -305,10 +290,10 @@ async function demo(s: DemoStep, chapter: string): Promise<void> {
 		await hideCaption();
 		KW.preview?.close();
 		// Closed in the background: the next step starts at once.
-		const win = demoWindow(d);
-		if (win) void closeWindow(win.n);
-		// Still launching (a download, say): close its window once it opens, so it never lingers.
-		else void launched.then(() => { const w = demoWindow(d); if (w) void closeWindow(w.n); });
+		const term = appTerminal(d);
+		if (term) void closeTerminal(term.n);
+		// Still launching (a download, say): close its terminal once it opens, so it never lingers.
+		else void launched.then(() => { const t = appTerminal(d); if (t) void closeTerminal(t.n); });
 	}
 }
 
@@ -322,7 +307,7 @@ async function shell(title: string, sub: string, chapter: string, cmds: string[]
 		await wait(hold);
 	} finally {
 		await hideCaption();
-		void closeWindow(w.n);
+		void closeTerminal(w.n);
 	}
 }
 
@@ -348,7 +333,7 @@ const STEPS: Step[] = [
 	{
 		id: "launcher", run: async () => {
 			if (warmOnly) return;
-			await caption(`${DEMOS.filter((d) => !d.hidden).length} demos, <b>ready to run</b>`);
+			await caption(`${APPS.filter((d) => !d.hidden && !isPageApp(d)).length} apps, <b>ready to run</b>`);
 			setLauncher(true);
 			try { await wait(1600); } finally { setLauncher(false); await hideCaption(); }
 		},
@@ -378,16 +363,11 @@ const STEPS: Step[] = [
 		play: (n) => typeAt(n, SQLITE, ["SELECT name, version, size FROM packages ORDER BY size DESC LIMIT 8;"]),
 	},
 
-	// Sound, then Doom to finish
+	// Sound to finish
 	{
 		demo: "radio", title: "Tune in to <b>internet radio</b>", sub: "mpg123 streaming SomaFM, network and sound from the guest", ready: /Station \(1-\d+/, hold: 4500,
 		play: async (n) => { await type(n, "1\n"); await until(() => running("mpg123"), 30_000); },
 	},
-	{
-		demo: "doom", title: "And of course, <b>Doom</b>", sub: "fbDOOM with Freedoom, compiled right here in the guest", display: true, hold: 800,
-		play: () => playDoom(8000),
-	},
-
 	{
 		id: "outro", run: async () => {
 			if (warmOnly) return;

@@ -156,8 +156,8 @@ lives in virtio_transport.c, so kwvsock has its own).
   VSOCKETS_LOOPBACK.
 - Guest tools (guest.md): `kwvsock`, `kwtty` (terminal sessions, programs
   on pipes and TCP relays for the host, port 1022), `kw9p`, the guest
-  GL forwarder `/usr/lib/kw/vtest-bridge` (connects to host port 1019;
-  gl.md), and wland's relay `/usr/lib/kw/wlandr` (connects to host port
+  GL forwarder `kwbox vtest` (connects to host port 1019;
+  gl.md), and wland's relay `/usr/lib/kw/wlandr` (the Debian image's; connects to host port
   1023, the page's `WAYLAND_PORT`; its buffers are kwshm exports, below;
   web.md, Wayland desktop).
 
@@ -315,7 +315,7 @@ There is no udev: the kw layer's rc gives `card*` to video (0660) and
 
 Host file systems use the stock 9p client with the fd transport: no driver
 and no host import (host `js/core/9p.ts`, guest `guest/src/kw9p.c`).
-`kw9p NAME DIR [ro]` connects an AF_VSOCK socket to the host (CID 2, port
+`kwbox 9p NAME DIR [ro]` connects an AF_VSOCK socket to the host (CID 2, port
 564) and mounts 9P2000.L with `trans=fd,rfdno=S,wfdno=S`,
 `cache=readahead` and `metatimeout=1000`; the client takes its own
 references to the socket, so kw9p exits after mount(2) and unmounting

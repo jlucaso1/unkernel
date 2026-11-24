@@ -61,7 +61,10 @@ export interface KernelSnapshot {
 	 */
 	cpus?: number;
 	memory64: boolean;
-	/** All of the kernel's memory; the pages it reported free are zero. */
+	/**
+	 * All of the kernel's memory; the pages it reported free are zero. One of
+	 * 2 GiB or more is on a SharedArrayBuffer where there is one.
+	 */
 	memory: Uint8Array;
 	/** Bytes of free pages left out of `memory` (0 if the kernel reported none). */
 	freeBytes?: number;
@@ -270,6 +273,31 @@ function usedOf(mem: Uint8Array): Uint8Array | undefined {
 	return used && used.length === Math.ceil(mem.byteLength / CHUNK) ? used : undefined;
 }
 
+/** Snapshot memories this large or larger are shared (newSnapshotMemory). */
+export const SHARED_SNAPSHOT_BYTES = 2 ** 31;
+
+/**
+ * A zeroed buffer for a snapshot memory of `bytes`. One of
+ * SHARED_SNAPSHOT_BYTES or more is on a SharedArrayBuffer where there is
+ * one (Node, a cross-origin isolated page): Chrome neither allocates a plain
+ * ArrayBuffer of 2 GiB nor posts one ("The ArrayBuffer/ArrayBufferView size
+ * exceeds the supported range"), but allocates a growable
+ * SharedArrayBuffer of up to 4 GiB (a fixed-size one of 2 GiB fails too) and
+ * posts it, shared rather than copied (Chrome 151, 2026-11-22). A shared
+ * memory crosses threads as it is: snapshot memories are not written after
+ * they are made.
+ */
+export function newSnapshotMemory(bytes: number): Uint8Array {
+	if (bytes >= SHARED_SNAPSHOT_BYTES && typeof SharedArrayBuffer === "function")
+		return new Uint8Array(new SharedArrayBuffer(bytes, { maxByteLength: bytes }), 0, bytes);
+	return new Uint8Array(bytes);
+}
+
+/** What to transfer when posting snapshot memory `m`: its buffer, or nothing for a shared one. */
+export function snapshotTransfer(m: Uint8Array): ArrayBuffer[] {
+	return m.buffer instanceof ArrayBuffer ? [m.buffer] : [];
+}
+
 /** A snapshot to post to another thread: with its used chunks, which receivedSnapshot() takes back. */
 export function sentSnapshot(s: KernelSnapshot): KernelSnapshot {
 	const used = usedOf(s.memory);
@@ -284,8 +312,11 @@ export function sentSnapshot(s: KernelSnapshot): KernelSnapshot {
  * Returns the copy and the bytes left out.
  */
 export function copySnapshotMemory(mem: Uint8Array, free: Uint8Array | null, bits: number): { memory: Uint8Array; freeBytes: number } {
-	if (!free || !bits) return { memory: mem.slice(), freeBytes: 0 };
-	const out = new Uint8Array(mem.byteLength); // zero, and untouched pages cost nothing
+	const out = newSnapshotMemory(mem.byteLength); // zero, and untouched pages cost nothing
+	if (!free || !bits) {
+		out.set(mem);
+		return { memory: out, freeBytes: 0 };
+	}
 	const used = new Uint8Array(Math.ceil(mem.byteLength / CHUNK));
 	const pages = Math.min(bits, Math.floor(mem.byteLength / PAGE), free.length * 8);
 	let runStart = -1, skipped = 0;
@@ -421,7 +452,7 @@ export function decodeSnapshot(bytes: Uint8Array): KernelSnapshot {
 	if (h.version !== 1) throw new Error(`unsupported snapshot version ${h.version}`);
 	const input = bytes.slice(p, p + h.inputBytes);
 	p += h.inputBytes;
-	const memory = new Uint8Array(h.memoryBytes);
+	const memory = newSnapshotMemory(h.memoryBytes);
 	const used = new Uint8Array(Math.ceil(h.memoryBytes / CHUNK));
 	for (let i = 0; i < h.chunks; i++) {
 		const c = dv.getUint32(p, true);

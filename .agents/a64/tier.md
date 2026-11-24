@@ -154,7 +154,10 @@ has retired on one CPU, every other CPU runs the new instructions from
 its next block boundary (at most 64 instructions later), no ISB needed
 there. The epoch exists only in atomics builds and the unit tests (two
 `kw_cpu` on one memory); a UP kernel pays nothing. Cost on SMP: one
-atomic load per block end, and a full retire (512 exec-TLB entries, then
+plain load per block end (not an atomic one: JavaScriptCore runs a wasm
+atomic load as a read-modify-write, and every CPU polling the one word
+that way ran user code on 4 CPUs at 0.35x of one, iPhone 15 Pro,
+2026-11-23; the word has 128 bytes to itself), and a full retire (512 exec-TLB entries, then
 one compare of raw words per block used again) per observed bump.
 
 Alternatives not taken: checking the epoch only at ISB and kw_run entry

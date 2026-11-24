@@ -7,8 +7,9 @@
 #
 #   wland [CMD [ARGS...]]
 #
-# wland's relay, /usr/lib/kw/wlandr (https://github.com/pithings/wland),
-# serves the Wayland socket /run/user/UID/wayland-0 and links it to the
+# wland's relay, /usr/lib/kw/wlandr (https://github.com/pithings/wland; in
+# the Debian image only, not in Alpine's or the base shell), serves the
+# Wayland socket /run/user/UID/wayland-0 and links it to the
 # page over vsock port 1023, where wland's compositor shows each app's
 # windows; the apps' buffers stay in guest memory, which the page reads in
 # place through /dev/kwshm.
@@ -44,12 +45,25 @@
 # render in software, as everywhere without the node). A relay started
 # before the node existed keeps rendering them in software: kill it
 # (pkill -x wlandr) to start one that takes them, which ends its apps.
+#
+# Vulkan apps: with a relay that has --external-buffers (its --version
+# lists external-buffers) the kw ICD presents each frame by naming the
+# swapchain image, which the page's Vulkan renderer shows without reading
+# it back, where the page offers that; else, and on other compositors,
+# by copying the frame into a wl_shm buffer.
 
 bb=/run/kw-lower/bin/busybox
 relay=/usr/lib/kw/wlandr
 link=vsock:2:1023
 die() { echo "wland: $*" >&2; exit 1; }
-[ -x $relay ] || die "no $relay in this system"
+if [ ! -x $relay ]; then
+	# The boot (rc) says nothing where there is no relay.
+	[ "${1-}" != --boot ] || exit 0
+	if [ -e /usr/lib/kw-distro ] && [ "$($bb cat /usr/lib/kw-distro)" = debian ]; then
+		die "this Debian image has no Wayland relay ($relay): it is older than this base, which no longer carries one; a newer Debian image does"
+	fi
+	die "this system has no Wayland relay ($relay): Wayland windows in the page need the Debian image"
+fi
 
 # What the relay can do: the features line of `wlandr --version` (tokens:
 # link-on-demand, dmabuf:virtgpu, no-fence-wait, ...). Relays up to wland
@@ -74,6 +88,9 @@ start() {
 		# The page's renderer gets a GL client's work before the relay's commit (one channel).
 		has no-fence-wait && flags="$flags --no-fence-wait"
 	fi
+	# Vulkan apps (the kw ICD) name their swapchain images instead of sending
+	# pixels, where the relay can and the page's Vulkan renderer resolves them.
+	has external-buffers && flags="$flags --external-buffers"
 	XDG_RUNTIME_DIR=$dir $bb setsid $relay --link $link --buffers kwshm $flags --display "$disp" \
 		</dev/null >"$dir/wlandr.log" 2>&1 &
 	pid=$!
@@ -183,7 +200,7 @@ export XDG_RUNTIME_DIR="$dir" WAYLAND_DISPLAY="$disp"
 # The toolkit hints (XDG_SESSION_TYPE=wayland, GTK, Qt, SDL, Firefox, Electron).
 [ -r /etc/profile.d/kw-wayland.sh ] && . /etc/profile.d/kw-wayland.sh
 if [ $# -eq 0 ]; then
-	echo "export XDG_RUNTIME_DIR='$XDG_RUNTIME_DIR' WAYLAND_DISPLAY='$WAYLAND_DISPLAY' XDG_SESSION_TYPE='$XDG_SESSION_TYPE' GDK_BACKEND='$GDK_BACKEND' QT_QPA_PLATFORM='$QT_QPA_PLATFORM' SDL_VIDEODRIVER='$SDL_VIDEODRIVER' MOZ_ENABLE_WAYLAND='$MOZ_ENABLE_WAYLAND' ELECTRON_OZONE_PLATFORM_HINT='$ELECTRON_OZONE_PLATFORM_HINT'"
+	echo "export XDG_RUNTIME_DIR='$XDG_RUNTIME_DIR' WAYLAND_DISPLAY='$WAYLAND_DISPLAY' XDG_SESSION_TYPE='$XDG_SESSION_TYPE' GDK_BACKEND='$GDK_BACKEND' QT_QPA_PLATFORM='$QT_QPA_PLATFORM' SDL_VIDEODRIVER='$SDL_VIDEODRIVER' SDL_VIDEO_WAYLAND_PREFER_LIBDECOR='$SDL_VIDEO_WAYLAND_PREFER_LIBDECOR' MOZ_ENABLE_WAYLAND='$MOZ_ENABLE_WAYLAND' ELECTRON_OZONE_PLATFORM_HINT='$ELECTRON_OZONE_PLATFORM_HINT' ADW_DEBUG_COLOR_SCHEME='$ADW_DEBUG_COLOR_SCHEME'"
 	exit 0
 fi
 export LANG="${LANG:-C.UTF-8}"

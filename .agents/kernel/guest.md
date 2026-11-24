@@ -15,7 +15,7 @@ overlay root are in data-disk.md.
 `vendor/build/bundle/unkernel.wasm` (command line `console=hvc0
 rdinit=/init`, the data disk template, the SMP patch) and copies that to
 `web/kernel/`. `KW_BASE_OUT=dir` puts all three in dir and copies nothing.
-2293 KiB (1147 KiB gzipped; wlandr, the kw layer below, is 586 KiB of it), bundle 10.7 MiB (2026-11-22).
+1508 KiB (844 KiB gzipped), bundle 11.0 MiB with base.cpio uncompressed (2026-11-22); 1607 KiB (885 KiB gzipped) with guest Vulkan's ICD (2026-11-24).
 
 - Alpine's static busybox (`busybox-static`, pinned in `base/pins.sh`
   with its own Alpine release), every applet linked in `/bin` (names from
@@ -35,7 +35,8 @@ rdinit=/init`, the data disk template, the SMP patch) and copies that to
   tree>`).
 - `kw.root=base`, no image labelled kwroot (`createKernel()` without
   `distro`, the CLI's `--distro none`), or an image that does not mount or
-  boot: the base shell on the base itself (busybox init, a root shell on hvc0
+  boot (also one whose init runs `/usr/bin/kwtty`: from before kwbox, Guest
+  tools below): the base shell on the base itself (busybox init, a root shell on hvc0
   with the prompt `base DIR #`, `kwtty serve`, the layer's rc and net),
   with `/data` mounted when there is one; `kw-overlay status NAME` works
   there. Most of `test/api.test.ts` runs on it.
@@ -45,23 +46,35 @@ rdinit=/init`, the data disk template, the SMP patch) and copies that to
 The top lower layer of every distro's root (`/kw/layer` in the base, so
 RAM-resident: keep it small). Everything in it is `kw-*` or under
 `/usr/lib/kw/`, so it never shadows a distro's file; its scripts run the
-base's busybox (`#!/run/kw-lower/bin/busybox sh`) and only gain features.
+base's busybox (`#!/run/kw-lower/bin/busybox sh`) and only gain features,
+with one floor: an image from before kwbox does not boot on a base with it
+(Guest tools, below).
 
-- `/usr/bin/kwtty`, `kw9p`, `kwvsock`, `kwshm`, `kwwasi`, `kwcmd` (Guest tools,
-  below). The image must not carry them: kwtty's protocol belongs to the
-  SDK shipped with the kernel. `glimmer` is not in the layer: every distro
+- `/usr/bin/kwbox`: the guest tools kwtty, kw9p, kwvsock, kwshm, kwwasi,
+  kwcmd and vtest-bridge as one program, `kwbox TOOL ARGS` (Guest tools,
+  below), with `/usr/lib/kw/kwwasi` (binfmt_misc's interpreter, a link to
+  it). The image must not carry them:
+  kwtty's protocol belongs to the SDK shipped with the kernel. `glimmer` is not in the layer: every distro
   build compiles it into its image (`install_common`, guest/lib/stage.sh),
   so the base shell has none.
-- `/usr/lib/kw/vtest-bridge` (Guest tools, below): the guest GL forwarder,
-  in the layer for the same reason (its link protocol belongs to the SDK's
+- `kwbox vtest` (Guest tools, below): the guest GL forwarder, in
+  the layer for the same reason (its link protocol belongs to the SDK's
   `gl` option).
-- `/usr/lib/kw/wlandr` and `/usr/lib/kw/bin/wland`: Wayland apps as
-  windows on the page (web.md, Wayland desktop). `wlandr` is wland's relay
-  (https://github.com/pithings/wland, MPL-2.0 and MIT), the static aarch64
-  release binary pinned in `guest/base/pins.sh` (`WLANDR_*`; about 590 KB,
-  its HTTP server included: the release has no smaller build;
-  `KW_WLANDR=<file>` builds the base with a local one instead, web.md,
-  Wayland desktop). One relay per user (`setsid`, its pid in
+- `/usr/lib/kw/libvulkan_kw.so` and `/usr/share/vulkan/icd.d/kw_icd.json`:
+  guest Vulkan's ICD (`vk/icd/build.sh`, aarch64 glibc; vk.md), in the
+  layer for the same reason (its link protocol belongs to the SDK's `vk`
+  option); the manifest is in the loader's default search path, so
+  Debian's `libvulkan1` finds it with no environment variables. Alpine's
+  musl loader cannot load it. `KW_VK=0` builds the base without it.
+- `/usr/lib/kw/bin/wland`: Wayland apps as windows on the page (web.md,
+  Wayland desktop) through wland's relay `/usr/lib/kw/wlandr`
+  (https://github.com/pithings/wland, MPL-2.0 and MIT), which only the
+  Debian image carries (Distro images, below), not the layer: the static
+  aarch64 release binary pinned in `guest/distro/debian/pins.sh`
+  (`WLANDR_*`; the `--link`-only build, 341 KB; `KW_WLANDR=<file>` builds
+  the image with a local one instead, web.md, Wayland desktop). Without it
+  (Alpine, the base shell, a Debian image older than the base) `wland
+  --boot` does nothing and `wland` fails saying so. One relay per user (`setsid`, its pid in
   `$XDG_RUNTIME_DIR/wlandr.pid`, its log `wlandr.log` there, afresh for
   each relay) with `--link vsock:2:1023 --buffers kwshm`, plus what its
   `wlandr --version` features line has (a relay without `--version`, the
@@ -70,7 +83,8 @@ base's busybox (`#!/run/kw-lower/bin/busybox sh`) and only gain features.
   closes the waiting apps at once), and where `/dev/dri/renderD128` exists
   `--dmabuf virtgpu:/dev/dri/renderD128` (GL apps by GPU resource; a
   running relay without it gets a note on how to restart it) with
-  `--no-fence-wait`. `wland --boot` (the layer's rc, as root, with
+  `--no-fence-wait`, and `--external-buffers` (Vulkan apps' swapchain
+  images by id; vk.md, Presentation). `wland --boot` (the layer's rc, as root, with
   `kw.wayland=1` on the command line: the page's boot) starts it for the
   image's user (`kw.user=`, else `user`, else root, as `kwtty login`
   picks), through busybox `su`, after making `/run/user/UID` (0700, the
@@ -94,8 +108,8 @@ base's busybox (`#!/run/kw-lower/bin/busybox sh`) and only gain features.
 - `/usr/lib/kw/rc`: cgroup2, devpts, `/dev/shm`, `/run/lock`, the
   hostname (`/etc/hostname` unless empty or `localhost`, else
   `unkernel`), binfmt_misc and the WASI format (kwwasi), the console
-  user's devices as udev's rules give them (no udev: `/dev/fb*` and
-  `/dev/dri/card*` to video, `/dev/input/*` to input, `/dev/dsp*`,
+  user's devices as udev's rules give them (no udev: `/dev/fb*`,
+  `/dev/dri/card*` and `/dev/udmabuf` to video, `/dev/input/*` to input, `/dev/dsp*`,
   `/dev/snd/*` to audio, 0660, by group name; `/dev/fuse` and
   `/dev/dri/renderD*` 0666; the drivers make them at boot, none later),
   udev's links `/dev/fd`, `/dev/stdin`, `/dev/stdout` and `/dev/stderr`,
@@ -117,7 +131,14 @@ base's busybox (`#!/run/kw-lower/bin/busybox sh`) and only gain features.
   then `/run/kw-overlay.msg` in yellow on a terminal.
 - `/usr/lib/kw/net`: lo, and eth0 by DHCP with busybox udhcpc (lease
   script `/usr/lib/kw/udhcpc`, which writes `/etc/resolv.conf` only when
-  it changes) on every distro.
+  it changes) on every distro. `net background` (the base shell, Debian's
+  kw-init; not Alpine's inittab) leaves DHCP to a job holding
+  `/run/kw-net.lock`, so the console's prompt can come before the lease;
+  `net wait` waits for that job (with its failure, kept in
+  `/run/kw-net.msg` instead of the console, it prints it and exits 1).
+  `kwtty serve` starts after `net wait`, so programs the host starts find
+  the network; a command typed at the console the moment the prompt shows
+  may not (`/usr/lib/kw/net wait` first).
 - `/usr/lib/kw/shutdown`: with `/data` mounted, stop every process, then
   `/usr/lib/kw/data-stop` (data-disk.md); then sync. When
   `/run/kw-shutdown` names the action (Alpine's `poweroff`, `reboot` and
@@ -155,7 +176,7 @@ base's busybox (`#!/run/kw-lower/bin/busybox sh`) and only gain features.
   (busybox init's console is vt102, without colours: TERM becomes
   xterm-256color), the X.Org fbdev/evdev config (below), and
   `/usr/share/licenses/unkernel` (the GPL notice for these files, which
-  names wlandr's own licences).
+  names the Debian image's wlandr's own licences).
 - `/usr/lib/kw/shrc`: the `/etc/profile.d/kw-*.sh` files (PATH, TERM, the
   prompt, command not found, the package manager through sudo) for
   interactive shells that are not login
@@ -174,7 +195,11 @@ The kw layer's `/usr/lib/kw/bin/fx`, `claude`, `opencode`, `node`, `npm`,
 `npx`, `bun`, `bunx`, `uv` and `uvx` link to `/usr/lib/kw/shim`, which installs the real program on
 its first call and runs it (described at its top). Every distro has them, the page and
 the CLI alike; `test/distro.test.ts` checks them on each image (no
-network).
+network). On the page it takes the glibc arm64 files the page's mirror has
+(claude, node, uv and the version lookups of opencode and uv) from
+`http://mirror.unkernel.dev` first, where that name resolves to a routed
+address (198.51.100.0/24: the page's own `fetch()`, web.md), and from the
+upstream when the mirror fails; elsewhere from the upstreams only.
 
 - PATH: `/usr/lib/kw/bin` comes last (kw-path.sh for every interactive
   shell, kwtty for programs it starts), and the install goes to `~/.local/bin`, which
@@ -316,7 +341,7 @@ layer: boot to a prompt 0.25 s (Alpine) and 0.32 s (Debian) from
   everything, runs the layer's shutdown and calls reboot(2) through the
   base's busybox. Services are Debian's init scripts under sysv-rc (with
   insserv and startpar, in `DEBIAN_PACKAGES`): kw-init runs runlevel 2
-  after net and 0 or 6 before it stops everything, only when that rc
+  once DHCP is done (`net wait`) and 0 or 6 before it stops everything, only when that rc
   directory has links to run; runlevel S (rcS.d) never runs, the layer's
   rc does early boot. `/usr/sbin/runlevel` prints what kw-init writes to
   `/run/kw-runlevel` (`N 2`), so that a package's invoke-rc.d starts its
@@ -338,6 +363,10 @@ layer: boot to a prompt 0.25 s (Alpine) and 0.32 s (Debian) from
   (`guest/tools/vm-run.ts` on the base bundle), so `apt-get install`
   works with no `apt-get update` first. The image's `policy-rc.d`
   (docker's `exit 101`) is removed after the build's own install.
+  wland's relay `/usr/lib/kw/wlandr` (the kw layer, above) is in this
+  image only; the page's boot (`kw.wayland=1`) reads it, and the build's
+  traced boots boot as the page does (`KW_TRACE_BOOT` in
+  `guest/lib/image.sh`), so it is in the boot set.
   `DEBIAN_PACKAGES` in build.sh (curl, ca-certificates, unzip) are
   installed at build time by the image's apt in the same build VM, from
   .debs the host fetches from snapshot.debian.org (checked against the
@@ -439,9 +468,6 @@ The files are in `guest/distro/alpine/rootfs/`.
   kwtty gives programs it starts directly the same PATH. Per-user installs
   go there (`pip install --user`, the fx and claude installers, the
   shims).
-- **bwrap shim** (`/usr/local/bin/bwrap`): no
-  seccomp, so it drops `--seccomp FD` and runs `/usr/bin/bwrap` with the
-  rest. GTK programs need it to load images (Xfce).
 - **curl shim** (`/usr/local/bin/curl`) over busybox
   wget, because the real curl costs about 2.4 MB of download and 5 MB of
   RAM. It handles only GET requests with `-L` whose result it can
@@ -455,7 +481,7 @@ The files are in `guest/distro/alpine/rootfs/`.
   (armv5-armv7, little-endian; the kernel has no AArch32) run through
   qemu-user. The inittab runs `/etc/kw-binfmt.sh`, which registers the
   four ELF types (flag P, `CONFIG_BINFMT_MISC`) with the interpreter
-  `/etc/kw-qemu`. WASI `.wasm` programs go to `/usr/bin/kwwasi`, which
+  `/etc/kw-qemu`. WASI `.wasm` programs go to `/usr/lib/kw/kwwasi`, which
   runs them on the host's wasm engine (js.md, WASI programs); the kw
   layer's rc registers it. **Guest only: never run kw-binfmt.sh on the
   host.**
@@ -505,13 +531,46 @@ programs (`guest/src/test/`) into the second archive. New code must stay
 within what kwemu implements: check it with the coverage classifier
 (a64/isa.md).
 
-- `kwvsock connect PORT [CID]` and `kwvsock listen PORT` pipe stdin and
+The layer's tools and vtest-bridge are one program, `/usr/bin/kwbox`
+(`kwbox.c`), with one copy of libc: each source is compiled as an object
+of its own with its `main` renamed (`-Dmain=kwtty_main`, so each still
+builds alone, as `test/wasi-binfmt.ts` and `gl/bridge/build-guest.sh` do).
+136 KB against 348 KB as seven programs (vtest-bridge adds 12 KB to it, 67
+KB alone; 2026-11-22). Callers name it: `kwbox TOOL ARGS` with TOOL `tty`,
+`9p`, `vsock`, `shm`, `wasi`, `cmd` or `vtest` (the GL forwarder, which
+serves Mesa's vtest socket; `gl` would also name virtio-gpu's path, which
+has no forwarder), or `growfs DEV DIR` (in `kwbox.c`: grows the ext4 on
+DEV mounted at DIR to DEV's size; the base's `/init` runs it on `/data`). The tool runs with argv[0] and the process name (comm)
+its program's own (`kwtty`, `kw9p`, ..., `vtest-bridge`): ps shows
+`{kwtty} /usr/bin/kwbox tty serve`, busybox `pidof kwtty` finds it
+(Debian's procps `pidof` matches argv[0], so there only `pidof kwbox`),
+and the tools' messages keep their names. Under any other name kwbox is the
+host command of that name (kwcmd, below), so a host command may be named
+like a tool, but not `kwbox` or `kwcmd`. binfmt_misc cannot pass a TOOL,
+so `/usr/lib/kw/kwwasi` links to it and kwbox runs kwwasi for that exact
+argv[0], the path the layer's rc registers. The old paths
+(`/usr/bin/kwtty`, `kw9p`, ...) are gone: an image from before kwbox,
+whose init runs `/usr/bin/kwtty login|serve`, gets no console shell and no
+`kwtty serve` on this base, and neither does an image whose inittab or
+kw-init the user changed before kwbox, which the data disk's upper layer
+keeps (no image update rewrites it, data-disk.md). The base's `/init`
+tells both apart from a boot to nothing: an init that runs `/usr/bin/kwtty`
+fails its check of the merged root, so a changed one in the upper layer
+gives safe mode (the image's own init on a tmpfs upper, with `kw-overlay
+status` and `discard`, or a fix in the upper from there), and the image's
+own gives the base shell, saying why. The SDK has no fallback to the old
+names: on a base from before kwbox, mounts, host commands and GL fail
+saying the guest has no `/usr/bin/kwbox`. `kwbox TOOL` costs nothing per exec against a
+standalone tool given one more argument (0.39 ms each for a usage error;
+base shell, Node, 2026-11-22).
+
+- `kwbox vsock connect PORT [CID]` and `kwbox vsock listen PORT` pipe stdin and
   stdout over a vsock connection.
-- `kwtty login` (the distros' inits, on hvc0): the console's login shell,
+- `kwbox tty login` (the distros' inits, on hvc0): the console's login shell,
   as the user `kw.user=NAME` on the kernel command line names (the CLI's
   `--user`), else the default user (below), with the terminal given to it,
   its groups, environment and home.
-- `kwtty serve [PORT]` (from inittab) serves sessions to the host on vsock
+- `kwbox tty serve [PORT]` (from inittab) serves sessions to the host on vsock
   port 1022 (privileged, so no unprivileged program can take it; only CID
   2 may connect, since there is no authentication). Each connection gets
   its own pty, size and resizes, and a user's login shell or the program
@@ -542,18 +601,19 @@ within what kwemu implements: check it with the coverage classifier
   without a transport, so kwtty asks `/dev/vsock` for the local CID
   (`IOCTL_VM_SOCKETS_GET_LOCAL_CID`) and, without a device, sleeps in
   `pause()` instead of exiting, so init does not respawn it every second.
-- `kw9p NAME DIR [ro]` mounts a host file system (devices.md, 9p); the SDK
+- `kwbox 9p NAME DIR [ro]` mounts a host file system (devices.md, 9p); the SDK
   runs it through kwtty.
 - `kwcmd` runs a command the host provides (`createKernel({ commands })`,
   `js/core/commands.ts`; the protocol is at the top of `kwcmd.c` and
-  there): through a link `/run/kw/bin/NAME`, or `kwcmd run NAME`, it
-  connects to vsock port 1020 and is that command's process. `kwcmd sync
-  NAME...` makes the links; the SDK runs it through kwtty.
-- `kwshm memfd SIZE [SEED]` and `kwshm export FILE` export a patterned
+  there): through a link `/run/kw/bin/NAME -> /usr/bin/kwbox`, or `kwbox
+  cmd run NAME`, it connects to vsock port 1020 and is that command's
+  process. `kwbox cmd sync NAME...` makes the links; the SDK runs it
+  through kwtty.
+- `kwbox shm memfd SIZE [SEED]` and `kwbox shm export FILE` export a patterned
   memfd or a file and print its id.
-- `/usr/lib/kw/vtest-bridge bridge --link vsock:2:1019 --daemon`: the guest
+- `kwbox vtest bridge --link vsock:2:1019 --daemon`: the guest
   GL forwarder, `gl/bridge/vtest-bridge.c` built stream-only
-  (`-DVTEST_BRIDGE_STREAM_ONLY`, 67 KB; gl.md, gl/bridge/README.md): Mesa's
+  (`-DVTEST_BRIDGE_STREAM_ONLY`, in kwbox; gl.md, gl/bridge/README.md): Mesa's
   vtest socket `/tmp/.virgl_test` (mode 0666, made once the host's renderer
   is ready) to the host's renderer on vsock port 1019, reconnecting every
   second. `--daemon` returns once it holds its lock (an abstract socket

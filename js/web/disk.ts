@@ -241,6 +241,25 @@ export class IdbStore implements OverlayStore {
 		});
 	}
 
+	/** The stored identity, without reading the index (undefined: none, or a reset that was cut off). */
+	async identity(): Promise<string | undefined> {
+		return this.#run("meta", "readonly", async (tx) => {
+			const meta = tx.objectStore("meta");
+			const [id, reset] = await Promise.all([reqP(meta.get("identity")), reqP(meta.get("reset"))]);
+			return reset || id === undefined ? undefined : String(id);
+		});
+	}
+
+	/** Replace the identity `from` with `to` (one transaction; false if the stored identity is not `from`). The blocks stay. */
+	async relabel(from: string, to: string): Promise<boolean> {
+		return this.#run("meta", "readwrite", async (tx) => {
+			const meta = tx.objectStore("meta");
+			if (await reqP(meta.get("reset")) || await reqP(meta.get("identity")) !== from) return false;
+			meta.put(to, "identity");
+			return true;
+		});
+	}
+
 	async close(): Promise<void> {
 		const p = this.dbp;
 		this.dbp = null;
@@ -308,6 +327,12 @@ export async function openDistroDisk(url: string, { chunkSize, prefetch, log }: 
 // store on first use; after that the store alone holds the disk (over a
 // ZeroBase), and is never reset implicitly: it is keyed by the format
 // version, not by the template.
+//
+// Its size is in the store's identity. The template is 4 GiB; a larger
+// disk (openDataDisk's `size`) is the template's blocks on a larger zero
+// base, and the guest's /init grows the file system to the device at boot
+// (`kwbox growfs`). A saved disk grows to a larger `size` (its identity is
+// relabelled; the new space reads as zeros) and never shrinks.
 
 export const DATA_DISK_NAME = "kwdata";
 export const DATA_DISK_VERSION = "v1";
@@ -326,6 +351,12 @@ export function dataDiskStore(size: number, { name = DATA_DISK_NAME, version = D
 	return { store: new IdbStore(id, { log }), identity: `${id} size=${size} bs=${BLOCK}` };
 }
 
+/** The size in a data disk identity of this name and version (dataDiskStore()), else undefined. */
+function identitySize(identity: string | undefined, name: string, version: string): number | undefined {
+	const m = identity?.match(/^(.*) size=(\d+) bs=(\d+)$/);
+	return m && m[1] === `${name}-${version}` && Number(m[3]) === BLOCK ? Number(m[2]) : undefined;
+}
+
 export interface OpenDataDiskOptions extends DataDiskNameOptions {
 	/** The template: a kwsparse image (gzipped or not), or a decoded one. */
 	template: Uint8Array | ArrayBuffer | KwsparseImage;
@@ -338,30 +369,42 @@ export interface OpenDataDiskOptions extends DataDiskNameOptions {
 	mode?: "persistent" | "snapshot";
 	/** Default 64 MiB. */
 	snapshotLimit?: number;
+	/**
+	 * The disk's size in bytes (rounded down to 4 KiB, at least the
+	 * template's): a new disk is made this large, a saved disk smaller than
+	 * this grows to it, a larger one keeps its size (a disk never shrinks).
+	 * The guest's /init grows the file system to the device. Default: the
+	 * saved disk's size, or the template's for a new one. Snapshot mode never
+	 * grows a saved disk.
+	 */
+	size?: number;
 	onError?: (err: unknown) => void;
 }
 
 /**
  * Open the data disk. The result has .persistent, and .notice when it is
  * not the persistent disk. Throws a DataDiskFormatError if the saved disk
- * has another identity (size); nothing is cleared, the caller decides (the
+ * has another identity (format); nothing is cleared, the caller decides (the
  * page runs a snapshot of the template and says why).
  */
 export async function openDataDisk({ name = DATA_DISK_NAME, version = DATA_DISK_VERSION, template, mode = "persistent",
-	snapshotLimit = 64 * 1048576, log = (m) => console.warn(m), onError }: OpenDataDiskOptions): Promise<CowDisk> {
+	snapshotLimit = 64 * 1048576, size, log = (m) => console.warn(m), onError }: OpenDataDiskOptions): Promise<CowDisk> {
 	const tpl = "indices" in template ? template : decodeKwsparse(await gunzipIfNeeded(template));
 	if (tpl.blockSize !== BLOCK) throw new Error(`data disk template: block size ${tpl.blockSize}, need ${BLOCK}`);
 	const haveIdb = typeof indexedDB !== "undefined";
-	const { store, identity } = dataDiskStore(tpl.size, { name, version, log });
+	const want = size !== undefined && size > 0 ? Math.max(tpl.size, Math.floor(size / BLOCK) * BLOCK) : undefined;
+	const { store } = dataDiskStore(0, { name, version, log });
+	const idOf = (n: number) => dataDiskStore(n, { name, version }).identity;
 
 	if (mode !== "persistent" || !haveIdb) {
-		let base = SparseBase.fromKwsparse(tpl), from = "the template";
+		let base = new SparseBase(want ?? tpl.size, tpl.map()), from = "the template";
 		if (haveIdb) {
 			try {
-				const st = await store.open(identity, { onMismatch: "refuse", write: false });
-				if (st.initialized && st.mismatch === undefined) {
+				const saved = identitySize(await store.identity(), name, version);
+				const st = saved === undefined ? null : await store.open(idOf(saved), { onMismatch: "refuse", write: false });
+				if (saved !== undefined && st?.initialized && st.mismatch === undefined) {
 					if (snapshotLimit > 0 && st.keys.size * BLOCK <= snapshotLimit) {
-						base = new SparseBase(tpl.size, await store.readAll());
+						base = new SparseBase(saved, await store.readAll());
 						from = "a copy of the saved disk";
 					} else {
 						from = `the template (the saved disk, ${(st.keys.size * BLOCK / 1048576).toFixed(0)} MiB, is too large to copy)`;
@@ -379,6 +422,14 @@ export async function openDataDisk({ name = DATA_DISK_NAME, version = DATA_DISK_
 	}
 
 	await warnOtherVersions(name, version, log);
+	// The saved size (another format's identity: none, and the open below refuses it), grown to `want`.
+	const savedId = await store.identity();
+	let eff = identitySize(savedId, name, version) ?? want ?? tpl.size;
+	if (savedId !== undefined && want !== undefined && want > eff && await store.relabel(savedId, idOf(want))) {
+		log(`[host] data disk: grew from ${eff / 1073741824} GiB to ${want / 1073741824} GiB (the guest grows its file system at boot)`);
+		eff = want;
+	}
+	const identity = idOf(eff);
 	const st = await store.open(identity, { onMismatch: "refuse" });
 	if (st.mismatch !== undefined) {
 		await store.close();
@@ -386,7 +437,7 @@ export async function openDataDisk({ name = DATA_DISK_NAME, version = DATA_DISK_
 		e.name = "DataDiskFormatError";
 		throw e;
 	}
-	const d = new CowDisk(new ZeroBase(tpl.size), { store, log, onError });
+	const d = new CowDisk(new ZeroBase(eff), { store, log, onError });
 	if (!st.initialized) {
 		const uid = await store.seed(tpl.indices.map((b, i) => [b, tpl.block(i).slice()]), identity);
 		d.adoptStore({ keys: new Set(tpl.indices), initialized: true, gen: 0, uid }, identity);

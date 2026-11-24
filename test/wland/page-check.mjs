@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
-// The page's Wayland desktop in headless Chromium: starts the page's Vite dev
+// The page's Wayland apps (wland) in headless Chromium: starts the page's Vite dev
 // server (web/, on --port, default 8092; never 8080, the one used by hand),
 // a fresh browser profile (its own IndexedDB: the user's data disk is never
 // touched), imports the prepared data disk (debian-disk.mjs: foot already
@@ -11,28 +11,32 @@
 // (?worker=0):
 //
 //   1  the page listens for wland's relay but has fetched nothing of wland
-//      (no request for wland.wasm, the Network domain) and shows no desktop
-//      icon before a Wayland app runs, while the relay the guest started at
-//      boot (kw.wayland=1 on the command line) runs on demand, undialed
+//      (no request for wland.wasm, the Network domain) and has no Wayland
+//      tile in the Dock (#dock-wayland) before a Wayland app runs, while the
+//      relay the guest started at boot (kw.wayland=1 on the command line)
+//      runs on demand, undialed
 //   P  a plain `foot` (no wland prefix) in a login shell maps a window: the
 //      relay dials at that app, wland is fetched only then; a second plain
 //      foot maps on the same link (the relay connected once)
-//   2  the launcher's foot tile (clicked in #launcher-grid) starts `wland
-//      foot` in a terminal window; a window titled foot maps on the desktop
-//      (KW.wayland.windows()), the desktop is shown (#wl-layer[data-shown])
-//      with its icon in the status line (#bar-desktop), wland.wasm was
-//      fetched after the first app, and the page has read the window's pixels
-//      through vm.shm (KW.wayland.stats())
+//   2  the launcher's foot tile (in its Graphics folder: the Dock's
+//      #dock-launcher, then data-folder="gl" in #launcher-grid, then
+//      data-app="foot" in #launcher-folder) runs foot in a terminal; a
+//      window titled foot maps (KW.wayland.windows()) and has the focus
+//      (wland's container #wl-desktop gets data-shown), the Dock has the
+//      Wayland tile (#dock-wayland), wland.wasm was fetched after the first
+//      app, and the page has read the window's pixels through vm.shm
+//      (KW.wayland.stats())
 //   3  a screenshot of the window's rectangle (Page.captureScreenshot) is not
 //      blank: many distinct colours, not one flat fill
 //   4  typed input reaches the app: a click on the window, then keys
 //      (Input.dispatchKeyEvent: what a keyboard sends) type a shell command
 //      into foot whose effect the guest shows (a file with 6*7 in it)
-//   5  `exit` typed in foot closes it: the window goes, the desktop hides by
-//      itself, and the relay keeps running (the icon stays)
-//   6  the keys typed into foot did not reach the terminal under the desktop,
-//      a second `wland CMD` reuses the running relay, and (worker mode) a
-//      relay that is killed goes (the desktop icon hides) and the next
+//   5  `exit` typed in foot closes it: the window goes, the focus leaves the
+//      Wayland apps (no data-shown), and the relay keeps running (the Dock's
+//      Wayland tile stays)
+//   6  the keys typed into foot did not reach the app's terminal, a second
+//      `wland CMD` reuses the running relay, and (worker mode) a relay that
+//      is killed goes (the Dock's Wayland tile goes) and the next
 //      `wland foot` starts a new one (on demand) that the page takes (a
 //      window maps)
 //
@@ -40,9 +44,9 @@
 //
 //   --apps    two foot windows: the newer has the keyboard, a click moves it,
 //             keys go to the focused one, closing one gives the other the
-//             keyboard; Alt+F10 maximizes to the desktop's size (foot
+//             keyboard; Alt+F10 maximizes to the workspace's size (foot
 //             redraws at it) and again restores; Alt+drag moves a window;
-//             the page resized (the stage) resizes a maximized window;
+//             the page resized (the workspace) resizes a maximized window;
 //             a quick click on foot's resize border starts no resize, a
 //             drag on it resizes; the clipboard from wl-copy to foot
 //             (Ctrl+Shift+V) and from foot's selection to wl-paste; wland's
@@ -55,9 +59,10 @@
 //   --keys    in foot: Ctrl-C stops a command, arrow keys walk the shell's
 //             history, Alt (Alt+. yanks the last argument), Ctrl-U, a held
 //             key repeats (browser auto-repeat keydowns), Ctrl-A Ctrl-A
-//             reaches foot as Ctrl-A; Ctrl-A w hides the desktop and the
-//             terminal takes the keys, Ctrl-A w shows it and foot has them
-//             again; picking the terminal in the status line hides it
+//             reaches foot as Ctrl-A; Ctrl-A w goes to the other windows and
+//             the terminal takes the keys, Ctrl-A w back and foot has them
+//             again; picking the app's terminal tab (#term-tab-N) leaves the
+//             Wayland windows too
 //   --pacing  frame pacing with a client that redraws continuously:
 //             weston-simple-shm (and foot under heavy output) for a few
 //             seconds each, commits per second, the reads' share of the
@@ -107,11 +112,11 @@
 //             click and Ctrl+L with a typed URL and Enter navigate; imports
 //             debian-wland-firefox.img (debian-disk.mjs --firefox)
 //
-//   S  with --suspend (worker mode): foot started again in the demo's
-//      window, Suspend (KW.suspend()) and a plain load resume the session;
+//   S  with --suspend (worker mode): foot started again in the foot app's
+//      terminal, Suspend (KW.suspend()) and a plain load resume the session;
 //      the old foot is gone (its link dropped), the relay (a guest process)
 //      goes idle and the new page fetches nothing of wland, and a plain
-//      `foot` typed in the demo's window maps (the relay dials again)
+//      `foot` typed in that terminal maps (the relay dials again)
 //
 //   node test/wland/page-check.mjs [--port N] [--cpus N] [--only worker|inline] [--apps] [--gtk] [--keys] [--pacing] [--all] [--gpu] [--chromium] [--firefox] [--suspend] [--fresh] [--built] [--output DIR] [--chrome BIN] [--timeout S] [--shots DIR] [--keep-open] [--verbose]
 //
@@ -309,7 +314,7 @@ try {
 		if (!await waitFor("typeof globalThis.KW?.ready === 'function'", 120000)) throw new Error(`the page did not load: ${await evaluate("location.href + ' | ' + document.body?.innerText.replace(/\\s+/g, ' ').slice(0, 600)").catch((e) => e.message)}`);
 		await evaluate("KW.ready().then(() => 1)");
 	};
-	const base = `http://127.0.0.1:${port}/?distro=debian${cpus !== "0" ? `&cpus=${cpus}` : ""}&mem=${firefoxTest ? 2048 : 1024}&autosuspend=0&askleave=0`;
+	const base = `http://127.0.0.1:${port}/?distro=debian${cpus !== "0" ? `&cpus=${cpus}` : ""}&mem=${firefoxTest ? 2048 : 1024}&autosuspend=0&askleave=0&autohide=0`;
 
 	// --- input as a keyboard and a mouse send it (Input.dispatch*) ---
 	const MOD = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
@@ -377,7 +382,8 @@ try {
 		const c = el ? [...el.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0] : null;
 		return { ...w, rect: r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null, canvas: c ? [c.width, c.height] : null };
 	}))`));
-	const desk = async () => JSON.parse(await evaluate(`JSON.stringify((() => { const r = document.querySelector("#wl-layer").getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, shown: !!document.querySelector("#wl-layer[data-shown]") }; })())`));
+	/** wland's container (#wl-desktop: the workspace's size, what maximize fills), and whether a Wayland window has the focus (its data-shown). */
+	const desk = async () => JSON.parse(await evaluate(`JSON.stringify((() => { const r = document.querySelector("#wl-desktop").getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, shown: !!document.querySelector("#wl-desktop[data-shown]") }; })())`));
 	const byTitle = (list, t) => list.find((w) => w.title === t);
 	const inside = (w, x, y) => x >= w.rect.x && x < w.rect.x + w.rect.w && y >= w.rect.y && y < w.rect.y + w.rect.h;
 	/**
@@ -403,8 +409,8 @@ try {
 	/** The same without wland: as typed in a login shell (kw-wayland.sh gives it the session). */
 	launch.plain = (cmd, log) => sh(`setsid bash -lc 'exec ${cmd}' >/tmp/wl-${log}.log 2>&1 </dev/null & sleep 0.2; echo started`);
 	const waitWindow = (title, ms = 60000) => waitFor(`KW.wayland.windows().some((w) => w.title === ${JSON.stringify(title)}) && 1`, ms, 300);
-	const activeIn = () => evaluate(`document.activeElement?.closest?.("#wl-desktop") ? "desktop" : document.activeElement?.closest?.("#terms") ? "terminal" : (document.activeElement?.id || document.activeElement?.tagName)`);
-	/** Ctrl-A, then a key: the page's prefix (shortcuts.ts). */
+	const activeIn = () => evaluate(`document.activeElement?.closest?.("#wl-desktop") ? "desktop" : document.activeElement?.closest?.("#workspace") ? "terminal" : (document.activeElement?.id || document.activeElement?.tagName)`);
+	/** Ctrl-A, then a key: the page's prefix (keys.ts). */
 	const prefix = async (code, key, vk, mods = []) => { await press(...letter("a"), ["ctrl"]); await sleep(50); await press(code, key, vk, mods); await sleep(150); };
 	const focusedTitle = async () => (await windows()).find((w) => w.focused)?.title ?? null;
 	// pkill -x matches the 15 characters of a process's name; -f with ^ matches the command line from its start, never this sh -c's own.
@@ -414,6 +420,21 @@ try {
 			k; for i in $(seq 20); do pgrep -x foot >/dev/null || pgrep -x l3afpad >/dev/null || pgrep -f '^(/usr/(local/)?bin/)?(weston-|es2gears|glmark2|gtk4-)' >/dev/null || break; sleep 0.25; done; k -9; true`);
 		await waitFor("KW.wayland.windows().length === 0 && 1", 15000);
 	};
+	/**
+	 * Page code: an async function that opens the launcher (the Dock's
+	 * #dock-launcher) unless it is open, then its Graphics folder
+	 * (data-folder="gl" in #launcher-grid: a folder opens before its apps'
+	 * tiles can be clicked), and resolves with app `id`'s tile there
+	 * (data-app in #launcher-folder), or null.
+	 */
+	const GL_TILE = `(async (id) => {
+		const until = async (f) => { for (let i = 0; i < 50 && !f(); i++) await new Promise((r) => setTimeout(r, 100)); return f(); };
+		if (!document.querySelector("#launcher")) document.querySelector("#dock-launcher").click();
+		const folder = await until(() => document.querySelector('#launcher-grid [data-folder="gl"]'));
+		if (!folder) return null;
+		folder.click();
+		return await until(() => document.querySelector('#launcher-folder [data-app="' + id + '"]'));
+	})`;
 	/**
 	 * The pixels wland drew for the window titled `t` (its largest canvas, read
 	 * back from its 2D context; null on wland's WebGL presenter): its size,
@@ -584,8 +605,8 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 		if ((!fresh && !/foot/.test(has)) || !/wlandr/.test(has)) { report(`${mode}: guest`, false, has); continue; }
 
 		// 1: nothing of wland before an app
-		const avail = await waitFor("KW.ui && document.querySelector('#bar-launcher') && KW.wayland && 1", 10000);
-		const pre = JSON.parse(await evaluate("JSON.stringify({ icon: !!document.querySelector('#bar-desktop'), loaded: KW.wayland?.loaded?.() ?? null })"));
+		const avail = await waitFor("KW.ui && document.querySelector('#dock-launcher') && KW.wayland && 1", 10000);
+		const pre = JSON.parse(await evaluate("JSON.stringify({ icon: !!document.querySelector('#dock-wayland'), loaded: KW.wayland?.loaded?.() ?? null })"));
 		// The relay the guest started at boot (wland --boot from the kw layer's rc), on demand: not dialed yet.
 		const boot = (await sh("cat /proc/cmdline; p=$(cat /run/user/1000/wlandr.pid); tr '\\0' ' ' < /proc/$p/cmdline; echo; grep VmRSS /proc/$p/status; cat /run/user/1000/wlandr.log")).split("\n");
 		const bootOk = / kw\.wayland=1\b/.test(boot[0]) && /--link-on-demand/.test(boot[1]) && boot.some((l) => /: on demand/.test(l)) && !boot.some((l) => /dialing| connected/.test(l));
@@ -610,9 +631,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 		// 2: the launcher's tile
 		const clickAt = Number(secs());
 		const clicked = await evaluate(`(async () => {
-			document.querySelector("#bar-launcher").click();
-			for (let i = 0; i < 50 && !document.querySelector("#launcher-grid"); i++) await new Promise((r) => setTimeout(r, 100));
-			const b = [...document.querySelectorAll("#launcher-grid [role=option]")].find((x) => [...x.querySelectorAll("span")].some((s) => s.textContent === "foot"));
+			const b = await ${GL_TILE}("foot");
 			if (!b) return "no foot tile";
 			if (b.getAttribute("aria-disabled") === "true") return "disabled: " + b.title;
 			b.click();
@@ -620,12 +639,14 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 		})()`);
 		say(`${mode}: foot tile ${clicked}`);
 		const win = await waitFor("KW.wayland.windows().find((w) => /foot/.test(w.title)) && JSON.stringify(KW.wayland.windows())", fresh ? 900000 : 180000, 500);
-		const state = JSON.parse(await evaluate(`JSON.stringify({ shown: !!document.querySelector("#wl-layer[data-shown]"), icon: !!document.querySelector("#bar-desktop"), buffers: KW.wayland.stats(), demoWin: KW.windows.list().find((w) => w.name === "foot")?.n ?? null })`));
+		const state = JSON.parse(await evaluate(`JSON.stringify({ shown: !!document.querySelector("#wl-desktop[data-shown]"), icon: !!document.querySelector("#dock-wayland"), buffers: KW.wayland.stats(), appTerm: KW.windows.list().find((w) => w.name === "foot")?.n ?? null })`));
 		if (shots) writeFileSync(join(shots, `${mode}-page.png`), Buffer.from((await send("Page.captureScreenshot", { format: "png" })).result.data, "base64"));
 		report(`${mode}: foot window`, !!win && state.shown && state.icon && state.buffers.reads > 0 && wlandRequests.some((r) => /\.wasm/.test(r.url)) && wlandRequests.every((r) => r.at >= plainAt),
 			`windows ${win}; ${JSON.stringify(state)}; wland fetched ${JSON.stringify(wlandRequests.map((r) => `${r.url.replace(/\?.*/, "")} at ${r.at}`))} (clicked at ${clickAt} s, the first app at ${plainAt} s)`);
 		if (!win) {
-			console.log(`--- the foot window (${state.demoWin}):\n${await evaluate(`KW.windows.text(${state.demoWin ?? 0}).trim().split("\\n").slice(-15).join("\\n")`)}`);
+			// Its packages install in the launcher's installer window (web/src/installer.ts), whose log is #installer-foot-log.
+			console.log(`--- the foot app's installer: ${await evaluate(`(() => { const el = document.querySelector("#installer-foot"); return el ? el.dataset.state + ": " + (document.querySelector("#installer-foot-step")?.textContent ?? "") + "\\n" + (document.querySelector("#installer-foot-log")?.textContent ?? "(log closed)").trim().split("\\n").slice(-15).join("\\n") : "none"; })()`)}`);
+			console.log(`--- the foot app's terminal (${state.appTerm}):\n${await evaluate(`KW.windows.text(${state.appTerm ?? 0}).trim().split("\\n").slice(-15).join("\\n")`)}`);
 			console.log(`--- relay log:\n${await sh("tail -20 /run/user/1000/wlandr.log")}`);
 			continue;
 		}
@@ -639,7 +660,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			if (shots) writeFileSync(join(shots, `${mode}-${name}.png`), png);
 			return decodePng(png);
 		};
-		if (!rect) report(`${mode}: window pixels`, false, "no canvas in the desktop's container");
+		if (!rect) report(`${mode}: window pixels`, false, "no canvas in the workspace");
 		else {
 			const img = await shot("foot");
 			const colours = new Map();
@@ -666,28 +687,28 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 
 		// 5: exit
 		await typeText("exit\n");
-		const gone = await waitFor("KW.wayland.windows().length === 0 && !document.querySelector('#wl-layer[data-shown]')", 30000);
-		const after = JSON.parse(await evaluate(`JSON.stringify({ icon: !!document.querySelector("#bar-desktop"), windows: KW.wayland.windows().length })`));
+		const gone = await waitFor("KW.wayland.windows().length === 0 && !document.querySelector('#wl-desktop[data-shown]')", 30000);
+		const after = JSON.parse(await evaluate(`JSON.stringify({ icon: !!document.querySelector("#dock-wayland"), windows: KW.wayland.windows().length })`));
 		const relay = await sh("tail -4 /run/user/1000/wlandr.log; kill -0 $(cat /run/user/1000/wlandr.pid) && echo relay-alive");
-		report(`${mode}: foot exits, the desktop hides`, !!gone && after.icon && /relay-alive/.test(relay), `${JSON.stringify(after)}; relay: ${relay.replace(/\n/g, " | ")}`);
+		report(`${mode}: foot exits, the Wayland apps lose the focus, the relay and its Dock tile stay`, !!gone && after.icon && /relay-alive/.test(relay), `${JSON.stringify(after)}; relay: ${relay.replace(/\n/g, " | ")}`);
 		const stats = await evaluate("JSON.stringify(KW.wayland.stats())");
 		say(`${mode}: buffers read ${stats}`);
 
 		// 6: foot's keys stayed out of the terminal; a second wland reuses the relay; killed, it is replaced
 		{
-			const termHad = await evaluate(`KW.windows.text(${state.demoWin ?? 0})`);
+			const termHad = await evaluate(`KW.windows.text(${state.appTerm ?? 0})`);
 			const pid1 = await sh("cat /run/user/1000/wlandr.pid");
 			const reuse = await sh(`${WL} true; echo rc=$?; cat /run/user/1000/wlandr.pid`);
 			let restart = "not checked inline", restartOk = true;
 			if (mode === "worker") {
 				await sh(`kill ${pid1}`);
-				const lost = await waitFor("!document.querySelector('#bar-desktop') && 1", 10000);
+				const lost = await waitFor("!document.querySelector('#dock-wayland') && 1", 10000);
 				await launch("foot -T again", "again");
 				const back = await waitWindow("again");
 				const pid2 = await sh("cat /run/user/1000/wlandr.pid");
 				const od = await sh(`tr '\\0' ' ' < /proc/${pid2}/cmdline`);
 				restartOk = !!lost && !!back && pid2 !== pid1 && /--link-on-demand/.test(od);
-				restart = `killed ${pid1}: icon gone ${!!lost}; wland foot: new relay ${pid2} (${od.trim()}), window ${!!back}`;
+				restart = `killed ${pid1}: Dock tile gone ${!!lost}; wland foot: new relay ${pid2} (${od.trim()}), window ${!!back}`;
 				await cleanupApps();
 			}
 			report(`${mode}: keys stay out of the terminal; wland reuses the relay${mode === "worker" ? ", and replaces a killed one" : ""}`,
@@ -695,7 +716,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 		}
 
 		const firstMode = mode === modes[0][0];
-		// --apps: two windows, focus, the window manager, the stage resized, the clipboard
+		// --apps: two windows, focus, the window manager, the page resized, the clipboard
 		if (want("--apps") && firstMode) {
 			await cleanupApps();
 			// The page's clipboard for wland's bridge (checked below): granted before any app copies, as a
@@ -721,20 +742,21 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 				`${list.map((w) => `${w.title} ${w.rect ? `${w.rect.w}x${w.rect.h}@${w.rect.x},${w.rect.y}` : "?"}`).join(", ")}; focused at first ${newer}, after the click ${f1}; /tmp/wl-a1 ${JSON.stringify(a1)}`);
 
 			// The window manager: Alt+F10 maximizes, Alt+drag moves; the page resized resizes the maximized window.
+			// Maximized, the WM window fills the workspace (foot asks for server-side decorations: its element is under the WM's title bar).
 			await clickWindow("two");
 			const before = byTitle(await windows(), "two");
 			await press(...special("F10"), ["alt"]);
-			const maxed = await waitFor(`(() => { const w = KW.wayland.container().querySelector('[data-wland-window="${before.key}"]'); const d = document.querySelector("#wl-layer").getBoundingClientRect(); const r = w.getBoundingClientRect(); const c = [...w.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0]; return Math.abs(r.width - d.width) < 3 && Math.abs(r.height - d.height) < 3 && c && c.width >= d.width - 3 && c.height >= d.height - 40; })()`, 15000, 250);
+			const maxed = await waitFor(`(() => { const w = KW.wayland.container().querySelector('[data-wland-window="${before.key}"]'); const d = document.querySelector("#wl-desktop").getBoundingClientRect(); const r = (w.closest(".wm-win") ?? w).getBoundingClientRect(); const c = [...w.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0]; return Math.abs(r.width - d.width) < 3 && Math.abs(r.height - d.height) < 3 && c && c.width >= d.width - 3 && c.height >= d.height - 40; })()`, 15000, 250);
 			const m = byTitle(await windows(), "two"), d0 = await desk();
 			if (shots) writeFileSync(join(shots, "apps-maximized.png"), Buffer.from((await send("Page.captureScreenshot", { format: "png" })).result.data, "base64"));
-			report("apps: Alt+F10 maximizes to the desktop's size, foot redraws at it (its title bar is a canvas of its own)", !!maxed && m.maximized,
-				`desktop ${d0.w}x${d0.h}; window ${m.rect.w}x${m.rect.h} at ${m.rect.x},${m.rect.y}, canvas ${m.canvas}, maximized ${m.maximized} (was ${before.rect.w}x${before.rect.h})`);
+			report("apps: Alt+F10 maximizes to the workspace's size, foot redraws at it (its title bar is a canvas of its own)", !!maxed && m.maximized,
+				`workspace ${d0.w}x${d0.h}; window ${m.rect.w}x${m.rect.h} at ${m.rect.x},${m.rect.y}, canvas ${m.canvas}, maximized ${m.maximized} (was ${before.rect.w}x${before.rect.h})`);
 			await send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 640, deviceScaleFactor: 1, mobile: false });
-			const resized = await waitFor(`(() => { const w = KW.wayland.container().querySelector('[data-wland-window="${before.key}"]'); const d = document.querySelector("#wl-layer").getBoundingClientRect(); const r = w.getBoundingClientRect(); const c = [...w.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0]; return d.width <= 1000 && Math.abs(r.width - d.width) < 3 && Math.abs(r.height - d.height) < 3 && c && Math.abs(c.width - d.width) < 3; })()`, 15000, 250);
+			const resized = await waitFor(`(() => { const w = KW.wayland.container().querySelector('[data-wland-window="${before.key}"]'); const d = document.querySelector("#wl-desktop").getBoundingClientRect(); const r = (w.closest(".wm-win") ?? w).getBoundingClientRect(); const c = [...w.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0]; return d.width <= 1000 && Math.abs(r.width - d.width) < 3 && Math.abs(r.height - d.height) < 3 && c && Math.abs(c.width - d.width) < 3; })()`, 15000, 250);
 			const m2 = byTitle(await windows(), "two"), d1 = await desk();
 			await send("Emulation.clearDeviceMetricsOverride");
-			const back = await waitFor(`(() => { const w = KW.wayland.container().querySelector('[data-wland-window="${before.key}"]'); const d = document.querySelector("#wl-layer").getBoundingClientRect(); const c = [...w.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0]; return d.width > 1100 && c && Math.abs(c.width - d.width) < 3; })()`, 15000, 250);
-			report("apps: the page resized, the maximized window follows the stage", !!resized && !!back, `stage ${d1.w}x${d1.h}: window ${m2.rect.w}x${m2.rect.h}, canvas ${m2.canvas}; back to ${(await desk()).w}: ${!!back}`);
+			const back = await waitFor(`(() => { const w = KW.wayland.container().querySelector('[data-wland-window="${before.key}"]'); const d = document.querySelector("#wl-desktop").getBoundingClientRect(); const c = [...w.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0]; return d.width > 1100 && c && Math.abs(c.width - d.width) < 3; })()`, 15000, 250);
+			report("apps: the page resized, the maximized window follows the workspace", !!resized && !!back, `workspace ${d1.w}x${d1.h}: window ${m2.rect.w}x${m2.rect.h}, canvas ${m2.canvas}; back to ${(await desk()).w}: ${!!back}`);
 			await press(...special("F10"), ["alt"]);
 			const restored = await waitFor(`(() => { const w = KW.wayland.windows().find((x) => x.title === "two"); const el = KW.wayland.container().querySelector('[data-wland-window="${before.key}"]'); const r = el.getBoundingClientRect(); return !w.maximized && Math.abs(r.width - ${before.rect.w}) < 3 && Math.abs(r.x - ${before.rect.x}) < 3; })()`, 15000, 250);
 			const r0 = byTitle(await windows(), "two");
@@ -783,13 +805,14 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			report("apps: clipboard from wl-copy to foot, and from foot's selection to wl-paste", clip1 === "wlclip42 two" && /42XY/.test(paste),
 				`wl-copy ${JSON.stringify(copy)}; foot pasted ${JSON.stringify(clip1)}; wl-paste after foot's copy: ${JSON.stringify(paste.slice(-200))}`);
 
-			// The page's clipboard (wland's bridge): text copied on the page (the user left the desktop
-			// for it: a click on the status line) pasted into foot (the paste chord's paste event carries
-			// it), and an app's copy written to it at the next click in the desktop.
+			// The page's clipboard (wland's bridge): text copied on the page (the user left the Wayland
+			// windows for it: a click on the Dock's strip beside its pill, where there is no window and
+			// no tile) pasted into foot (the paste chord's paste event carries it), and an app's copy
+			// written to it at the next click in a Wayland window.
 			{
 				const gesture = (expression) => send("Runtime.evaluate", { expression, awaitPromise: true, userGesture: true, returnByValue: true }).then((r) => r.result?.result?.value ?? r.result?.exceptionDetails?.exception?.description);
-				const bar = JSON.parse(await evaluate(`(() => { const r = document.querySelector("#bar-desktop").getBoundingClientRect(); return JSON.stringify([r.x - 60, r.y + r.height / 2]); })()`));
-				await mouse(...bar);
+				const strip = JSON.parse(await evaluate(`(() => { const s = document.querySelector("#dock").getBoundingClientRect(), p = document.querySelector("#dock .dock-pill").getBoundingClientRect(); return JSON.stringify([(s.left + p.left) / 2, s.top + s.height / 2]); })()`));
+				await mouse(...strip);
 				const put = await gesture(`navigator.clipboard.writeText("pageclip7").then(() => "ok", (e) => e.message)`);
 				await sh("rm -f /tmp/wl-pg");
 				await clickWindow("two");
@@ -806,7 +829,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 					`page clipboard written: ${put}; foot pasted ${JSON.stringify(pg)}; wl-copy ${JSON.stringify(copied)}, then the page's clipboard: ${JSON.stringify(got)}`);
 			}
 
-			// Closing one window: the other gets the keyboard, the desktop stays.
+			// Closing one window: the other gets the keyboard and the focus (data-shown stays).
 			await clickWindow("one");
 			const f3 = await focusedTitle();
 			await typeText("exit\n");
@@ -815,8 +838,8 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			const f4 = await focusedTitle(), dk = await desk();
 			await typeText("echo $WIN > /tmp/wl-a2\n");
 			const a22 = await fileFor("/tmp/wl-a2", /\w/, 10000);
-			report("apps: closing one gives the other the keyboard, the desktop stays", f3 === "one" && !!closed && f4 === "two" && dk.shown && a22 === "two",
-				`closed ${f3}: ${!!closed}; focused now ${f4}; desktop shown ${dk.shown}; typed into two: ${JSON.stringify(a22)}`);
+			report("apps: closing one gives the other the keyboard, the Wayland windows keep the focus", f3 === "one" && !!closed && f4 === "two" && dk.shown && a22 === "two",
+				`closed ${f3}: ${!!closed}; focused now ${f4}; a Wayland window focused ${dk.shown}; typed into two: ${JSON.stringify(a22)}`);
 			await cleanupApps();
 		}
 
@@ -872,7 +895,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			await cleanupApps();
 		}
 
-		// --keys: in foot; then the page's shortcuts and the focus between the desktop and the terminal
+		// --keys: in foot; then the page's shortcuts and the focus between the Wayland windows and the terminal
 		if (want("--keys") && firstMode) {
 			await cleanupApps();
 			await sh("rm -f /tmp/wl-k*");
@@ -924,7 +947,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			report("keys: Ctrl-C, Up and Left, Alt+., Ctrl-U, a held key repeats, Ctrl-A Ctrl-A reaches foot", after === "after" && !late && hist === "hist1" && left === "abX" && altOk && cu === "cu" && xs >= 3 && xs <= 40 && ca === "ca",
 				`Ctrl-C: after ${JSON.stringify(after)}, late ${JSON.stringify(late)}; history ${JSON.stringify(hist)}; left ${JSON.stringify(left)}; Alt+. ${altOk}; Ctrl-U ${JSON.stringify(cu)}; held x for 1.13 s: ${xs} x (wland: repeat 25/s after 400 ms); Ctrl-A Ctrl-A ${JSON.stringify(ca)}`);
 
-			// The page's shortcuts and the focus: Ctrl-A w hides the desktop (the terminal takes the keys), again shows it (foot has them).
+			// The page's shortcuts and the focus: Ctrl-A w goes to the other windows (the terminal takes the keys), again back (foot has them).
 			await prefix(...letter("w"));
 			const hidden = await desk(), act1 = await activeIn();
 			await typeText("echo term > /tmp/wl-kterm\n");
@@ -934,13 +957,13 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			const shownAgain = await desk(), act2 = await activeIn(), f = await focusedTitle();
 			await typeText("echo back > /tmp/wl-kback\n");
 			const backTyped = await fileFor("/tmp/wl-kback", /back/, 10000);
-			// The status line's terminal window hides the desktop too.
-			const winBtn = await evaluate(`(() => { const b = document.querySelector("#bar-win-${state.demoWin ?? 0}"); b?.click(); return !!b; })()`);
+			// The foot app's terminal tab (in its Terminal window's title bar) leaves the Wayland windows too.
+			const winBtn = await evaluate(`(() => { const b = document.querySelector("#term-tab-${state.appTerm ?? 0}"); b?.click(); return !!b; })()`);
 			await sleep(300);
 			const hidden2 = await desk(), act3 = await activeIn();
-			report("keys: Ctrl-A w hides the desktop and the terminal takes the keys, again shows it and foot has them, the status line's window hides it",
+			report("keys: Ctrl-A w goes to the other windows and the terminal takes the keys, again back and foot has them, the app's terminal tab leaves them",
 				!hidden.shown && act1 === "terminal" && term === "term" && shownAgain.shown && act2 === "desktop" && f === "keys" && backTyped === "back" && winBtn && !hidden2.shown && act3 === "terminal",
-				`hidden: shown ${hidden.shown}, focus ${act1}, typed ${JSON.stringify(term)}; shown: ${shownAgain.shown}, focus ${act2}, window ${f}, typed ${JSON.stringify(backTyped)}; status line window: shown ${hidden2.shown}, focus ${act3}`);
+				`away: Wayland focused ${hidden.shown}, focus ${act1}, typed ${JSON.stringify(term)}; back: ${shownAgain.shown}, focus ${act2}, window ${f}, typed ${JSON.stringify(backTyped)}; terminal tab: Wayland focused ${hidden2.shown}, focus ${act3}`);
 			await prefix(...letter("w"));
 			await cleanupApps();
 		}
@@ -974,7 +997,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 
 		// S: suspend with foot running, resume with a plain load
 		if (suspendTest && mode === "worker") {
-			const n = state.demoWin;
+			const n = state.appTerm;
 			await evaluate(`KW.windows.send(${n}, "wland foot\\n")`);
 			const again = await waitFor("KW.wayland.windows().length === 1", 60000, 500);
 			const sv = await evaluate("KW.suspend().then((r) => JSON.stringify(r), (e) => 'failed: ' + e.message)");
@@ -988,7 +1011,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			}
 			// The resume reset the relay's link: its apps are gone, and it waits for the next app (on demand).
 			const idleLog = await fileFor("/run/user/1000/wlandr.log", /dialing again for the next app/, 20000);
-			const idle = JSON.parse(await evaluate("JSON.stringify({ icon: !!document.querySelector('#bar-desktop'), loaded: KW.wayland.loaded(), windows: KW.wayland.windows().length })"));
+			const idle = JSON.parse(await evaluate("JSON.stringify({ icon: !!document.querySelector('#dock-wayland'), loaded: KW.wayland.loaded(), windows: KW.wayland.windows().length })"));
 			const idleReqs = wlandRequests.length;
 			const idleOk = /dialing again for the next app/.test(idleLog) && !idle.icon && !idle.loaded && !idle.windows && idleReqs === 0;
 			const log = await sh("grep -c ' connected$' /run/user/1000/wlandr.log; tail -6 /run/user/1000/wlandr.log");
@@ -997,15 +1020,13 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 			report("suspend and resume with foot open: the relay goes idle, a plain foot maps", !/^failed/.test(sv) && / resumed/.test(row) && !/not resumed/.test(row) && idleOk && !!third,
 				`suspend ${sv}; ${row.slice(0, 100)}; after the resume ${JSON.stringify(idle)}, ${idleReqs} wland requests (${wlandRequests.length} after the plain foot); a plain foot mapped: ${!!third}; relay log: ${log.replace(/\n/g, " | ")}`);
 
-			// A session saved without kwshm (?shm=0 boots as the page did before the desktop): the tile is
-			// disabled with why, wland says so; a plain load resumes it as it was (no kwshm), and the next
-			// fresh boot has kwshm again.
+			// A session saved without kwshm (?shm=0 boots as the page did before the Wayland apps): the foot
+			// tile is disabled with why, wland says so; a plain load resumes it as it was (no kwshm), and the
+			// next fresh boot has kwshm again.
 			const noShm = async () => JSON.parse(await evaluate(`(async () => {
-				document.querySelector("#bar-launcher").click();
-				for (let i = 0; i < 50 && !document.querySelector("#launcher-grid"); i++) await new Promise((r) => setTimeout(r, 100));
-				const b = [...document.querySelectorAll("#launcher-grid [role=option]")].find((x) => [...x.querySelectorAll("span")].some((s) => s.textContent === "foot"));
+				const b = await ${GL_TILE}("foot");
 				const r = { shm: !!KW.vm.shm, disabled: b?.getAttribute("aria-disabled") === "true", why: b?.title ?? null };
-				document.querySelector("#bar-launcher").click();
+				document.querySelector("#dock-launcher").click();
 				return JSON.stringify(r);
 			})()`));
 			await openPage(`${base}${param}&shm=0`);
@@ -1177,7 +1198,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 					`wland: ${JSON.stringify(said.slice(0, 160))}; linux-dmabuf listed ${inf.trim()} times; ${b.reads - a.reads} shm reads, ${b.gpuCommits - a.gpuCommits} GPU commits; pixels ${JSON.stringify(p)}`);
 				await cleanupApps();
 				await sh("pkill -x wlandr; sleep 0.5");
-				await waitFor("!document.querySelector('#bar-desktop') && 1", 10000);
+				await waitFor("!document.querySelector('#dock-wayland') && 1", 10000);
 			}
 
 			// --link-on-demand with a render node missing at the relay's start: a warning, and the node is looked
@@ -1198,7 +1219,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 					`at the start: ${before.split("\n").find((l) => /dmabuf/.test(l))}; after the dial: ${after.split("\n").find((l) => /main device/.test(l))}; linux-dmabuf listed ${inf.trim()} times; ${b.gpuImages - a.gpuImages} GPU images`);
 				await cleanupApps();
 				await sh("pkill -x wlandr; rm -f /tmp/kw-rnode; sleep 0.5");
-				await waitFor("!document.querySelector('#bar-desktop') && 1", 10000);
+				await waitFor("!document.querySelector('#dock-wayland') && 1", 10000);
 				// A relay as the boot leaves one, for the plain apps of the cases below (the launcher's tile).
 				await sh("/usr/lib/kw/bin/wland true");
 			}
@@ -1235,9 +1256,7 @@ addEventListener("scroll",T);addEventListener("resize",T);addEventListener("keyd
 				say("gpu: the GL windows tile");
 				a = await statsNow();
 				const clicked = await evaluate(`(async () => {
-					document.querySelector("#bar-launcher").click();
-					for (let i = 0; i < 50 && !document.querySelector("#launcher-grid"); i++) await new Promise((r) => setTimeout(r, 100));
-					const b = [...document.querySelectorAll("#launcher-grid [role=option]")].find((x) => [...x.querySelectorAll("span")].some((s) => s.textContent === "GL windows"));
+					const b = await ${GL_TILE}("wlgl");
 					if (!b) return "no GL windows tile";
 					if (b.getAttribute("aria-disabled") === "true") return "disabled: " + b.title;
 					b.click();

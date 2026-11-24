@@ -39,3 +39,21 @@ DEBIAN_CONTENTS="
 main/Contents-arm64.gz 276dbed691664effd4be91435f7e0d1552f0ab645c0aa0397de9ba5900e13b74
 main/Contents-all.gz   0c2e2d099588073221d6eebb0a84e950f1728818faf527de9034d0116f7a8221
 "
+# wland's relay (https://github.com/pithings/wland, MPL-2.0 AND MIT): the
+# static aarch64 wlandr of a wland release, installed as /usr/lib/kw/wlandr
+# (the kw layer's /usr/lib/kw/bin/wland starts it; Wayland apps as windows
+# in the page). Only this image has it: the base and Alpine have no relay.
+# The asset is the --link-only build (wlandr-link-linux-arm64.tar.gz, entry
+# wlandr; no HTTP server). GL apps by GPU resource (--dmabuf virtgpu, which
+# bin/wland passes only to a relay that has it) need 0.1.0-261122 or later,
+# as does the page (web/package.json; .agents/web.md, Wayland desktop).
+# The relay at boot (wland --boot: --link-on-demand, read from wlandr
+# --version, as --no-fence-wait is) needs 0.1.0-261122-632f589 or later;
+# with an older one the boot starts none and wland CMD works as before.
+# Bump together: WLANDR_VERSION, WLANDR_SHA256 and wland's version in
+# web/package.json. build.sh takes a local relay from KW_WLANDR instead
+# (development).
+WLANDR_VERSION=v0.1.0-261124-3c987e5
+WLANDR_TARBALL="wlandr-link-$WLANDR_VERSION-linux-arm64.tar.gz"
+WLANDR_URL="https://github.com/pithings/wland/releases/download/$WLANDR_VERSION/wlandr-link-linux-arm64.tar.gz"
+WLANDR_SHA256=627b5b235a7dd1718c14a166e2609599ff66278ef004de711c2c199d2f8a0e57

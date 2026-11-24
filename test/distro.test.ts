@@ -88,7 +88,7 @@ for (const name of ["alpine", "debian"]) {
 			assert.equal(vm.distro?.label, "kwroot");
 			assert.equal(await sh(vm, "cat /usr/lib/kw-distro"), name);
 			assert.match(await sh(vm, "grep ' / ' /proc/self/mounts"), /^overlay \/ overlay .*lowerdir=\/kw\/layer:\/kw\/distro/m);
-			assert.match(await sh(vm, "ls /usr/bin/kwtty"), /kwtty/);
+			assert.match(await sh(vm, "ls /usr/bin/kwbox"), /kwbox/);
 			assert.equal(await sh(vm, "cat /sys/block/wda/ro"), "1");
 			const w = await vm.exec("sh", ["-c", "echo x > /dev/wda"], EXEC);
 			assert.notEqual(w.exitCode, 0, "a write to the distro's disk fails");
@@ -143,6 +143,19 @@ for (const name of ["alpine", "debian"]) {
 			return { vm, out: () => text };
 		};
 		const st = `/data/distros/${name}`;
+
+		test("an init in the data disk's upper layer that runs /usr/bin/kwtty (from before kwbox) gives safe mode with the image's own init", async (t) => {
+			const data = await dataDisk(`${name}-oldinit`);
+			const b1 = await bootData(t, data);
+			const init = name === "alpine" ? "/etc/inittab" : "/usr/local/sbin/kw-init";
+			const line = name === "alpine" ? "::once:/usr/bin/kwtty serve" : "/usr/bin/kwtty serve";
+			await asRoot(b1.vm, `echo '${line}' >> ${init} && sync`);
+			await poweroff(b1.vm);
+			const b2 = await bootData(t, data);
+			assert.match(b2.out(), /kw-overlay: SAFE MODE: its init runs \/usr\/bin\/kwtty, from before kwbox/);
+			assert.match(await sh(b2.vm, "cat /run/kw-base"), /^upper=tmpfs$/m);
+			await poweroff(b2.vm);
+		});
 
 		test("a root on the data disk that cannot boot (/bin/sh deleted) falls back to safe mode, and the next boot checks again", async (t) => {
 			const data = await dataDisk(`${name}-safe`);
@@ -295,6 +308,9 @@ for (const name of ["alpine", "debian"]) {
 			vm.write("\necho \"con-$(id -un)-$(pwd)-$((6*7))\"\n");
 			for (let i = 0; i < 600 && !/con-\w+-\S+-42/.test(out); i++) await new Promise((r) => setTimeout(r, 100));
 			assert.match(out, new RegExp(`con-user-${HOME}-42`));
+			vm.write("\ngrep SigIgn /proc/self/status\n");
+			for (let i = 0; i < 600 && !/SigIgn:\s+\w{16}/.test(out); i++) await new Promise((r) => setTimeout(r, 100));
+			assert.match(out, /SigIgn:\s+0{16}/, "the console's programs do not ignore ^C");
 			await poweroff(vm);   // as the user: poweroff goes through sudo
 			const vm2 = await boot(t, { distro: img!.file, cmdline: `${bundled!.cmdline} kw.user=root` });
 			out = "";

@@ -10,8 +10,8 @@
 # which needs a host serving vsock port 1021 (the CLI's --wasi; prototype).
 # A distro registers its own formats after this (Alpine: qemu-user).
 # There is no udev, so this gives the console user's devices the groups
-# and modes udev's rules give them: the framebuffer and DRM's card nodes
-# to video, input devices to input, sound to audio (0660), /dev/fuse and
+# and modes udev's rules give them: the framebuffer, DRM's card nodes and
+# /dev/udmabuf to video, input devices to input, sound to audio (0660), /dev/fuse and
 # DRM's render nodes to everyone (0666); by group name, so on a root
 # without that group (the base shell) the device stays root's. The drivers
 # make these devices at boot; none comes later. It also makes udev's
@@ -32,20 +32,21 @@ m tmpfs /dev/shm nosuid,nodev,mode=1777
 [ -e /dev/fd ] || ln -s /proc/self/fd /dev/fd
 for f in 0:stdin 1:stdout 2:stderr; do [ -e /dev/${f#*:} ] || ln -s /proc/self/fd/${f%:*} /dev/${f#*:}; done
 mkdir -p -m 1777 /run/lock
-h=$(head -n1 /etc/hostname 2>/dev/null)
+h=
+IFS= read -r h 2>/dev/null < /etc/hostname
 case $h in '' | localhost | localhost.*) h=unkernel ;; esac
 hostname "$h"
 d=/proc/sys/fs/binfmt_misc
 if [ -d $d ] && { mountpoint -q $d || mount -t binfmt_misc binfmt_misc $d 2>/dev/null; } &&
-	[ -x /usr/bin/kwwasi ] && [ ! -e $d/wasi ]; then
-	printf '%s\n' ':wasi:M::\x00asm\x01\x00\x00\x00::/usr/bin/kwwasi:P' > $d/register
+	[ -x /usr/lib/kw/kwwasi ] && [ ! -e $d/wasi ]; then
+	printf '%s\n' ':wasi:M::\x00asm\x01\x00\x00\x00::/usr/lib/kw/kwwasi:P' > $d/register
 fi
 dev() {
 	g=$1 m=$2
 	shift 2
 	for f; do [ -e "$f" ] && chgrp "$g" "$f" 2>/dev/null && chmod "$m" "$f"; done
 }
-dev video 660 /dev/fb[0-9]* /dev/dri/card*
+dev video 660 /dev/fb[0-9]* /dev/dri/card* /dev/udmabuf
 dev input 660 /dev/input/event* /dev/input/mice /dev/input/mouse* /dev/input/js*
 dev audio 660 /dev/dsp* /dev/audio* /dev/mixer* /dev/snd/*
 for f in /dev/fuse /dev/dri/renderD*; do [ -e "$f" ] && chmod 666 "$f"; done

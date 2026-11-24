@@ -5,12 +5,14 @@
 // source) and run a shell script in it: for build steps that need the
 // image's own programs (distro/debian/build.sh: apt's source cache).
 //
-//   node vm-run.ts KERNEL IMAGE [--mem MiB] [--net] [--data FILE] [--timeout s]
-//                  [--shell PROGRAM] [--get GUESTFILE=HOSTFILE]... [--trace FILE] SCRIPT
+//   node vm-run.ts KERNEL IMAGE [--mem MiB] [--net] [--shm] [--append ARGS] [--data FILE]
+//                  [--timeout s] [--shell PROGRAM] [--get GUESTFILE=HOSTFILE]... [--trace FILE] SCRIPT
 //
 // SCRIPT runs as `sh -c SCRIPT` (or PROGRAM -c SCRIPT) as root through the
 // base's kwtty, with no network unless --net; its output is passed on, and a
-// non-zero exit fails the run.
+// non-zero exit fails the run. --shm gives the guest kwshm (/dev/kwshm), --append
+// adds ARGS to the bundle's kernel command line (the page's boot: --shm --append
+// "kw.gl=1 kw.wayland=1", which starts wland's relay at boot).
 // Then each --get copies a guest file out, binary-safe (exec's stdout as
 // bytes), checked against the size and SHA-256 the guest reports. The VM is
 // powered off at the end (the root's changes are in memory, unless --data).
@@ -21,16 +23,18 @@
 // whole boot whatever the timing.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { createKernel, directBackend, FileDisk, NetStack, type BlockDevice } from "../../js/node.ts";
+import { bundledBoot, createKernel, directBackend, FileDisk, NetStack, type BlockDevice } from "../../js/node.ts";
 
 const args = process.argv.slice(2);
 const pos: string[] = [];
 const gets: Array<[string, string]> = [];
-let mem = 512, net = false, data: string | undefined, timeout = 600, shell = "sh", trace: string | undefined;
+let mem = 512, net = false, shm = false, append = "", data: string | undefined, timeout = 600, shell = "sh", trace: string | undefined;
 while (args.length) {
 	const a = args.shift()!;
 	if (a === "--mem") mem = Number(args.shift());
 	else if (a === "--net") net = true;
+	else if (a === "--shm") shm = true;
+	else if (a === "--append") append = args.shift()!;
 	else if (a === "--data") data = args.shift();
 	else if (a === "--timeout") timeout = Number(args.shift());
 	else if (a === "--shell") shell = args.shift()!;
@@ -42,7 +46,7 @@ while (args.length) {
 	} else pos.push(a);
 }
 if (pos.length !== 3) {
-	console.error("usage: vm-run.ts KERNEL IMAGE [--mem MiB] [--net] [--data FILE] [--timeout s] [--shell PROGRAM] [--get GUESTFILE=HOSTFILE]... [--trace FILE] SCRIPT");
+	console.error("usage: vm-run.ts KERNEL IMAGE [--mem MiB] [--net] [--shm] [--append ARGS] [--data FILE] [--timeout s] [--shell PROGRAM] [--get GUESTFILE=HOSTFILE]... [--trace FILE] SCRIPT");
 	process.exit(2);
 }
 const [kernel, image, script] = pos as [string, string, string];
@@ -71,7 +75,8 @@ const onOutput = trace ? (b: Uint8Array) => {
 	if (/[#$⇒] $/.test(tail.replace(/\x1b\][^\x07]*\x07|\x1b\[[0-9;?]*[A-Za-z]/g, ""))) prompted();
 } : undefined;
 const vm = await createKernel({
-	kernel: module, memoryMiB: mem, distro, log: () => {}, onOutput,
+	kernel: module, memoryMiB: mem, distro, log: () => {}, onOutput, shm,
+	...(append ? { cmdline: `${bundledBoot(module).cmdline} ${append}` } : {}),
 	// A traced boot is a boot as the page and the CLI make it: with a console size, the
 	// login shell also reads the kernel console's terminfo entry (linux).
 	...(trace ? { consoleSize: { cols: 120, rows: 30 } } : {}),

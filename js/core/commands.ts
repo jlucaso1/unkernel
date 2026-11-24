@@ -10,10 +10,11 @@
 //   } });
 //   await vm.exec("sh", ["-c", "hello world | upper"]);   // spawn() and exec() wait for the commands
 //
-// In the guest each command is a link /run/kw/bin/NAME to kwcmd
-// (guest/src/kwcmd.c; the directory is first on PATH), made by `kwcmd sync
-// NAME...`, which this runs through kwtty whenever the commands change. A
-// guest process that runs NAME is kwcmd under that name: a normal process
+// In the guest each command is a link /run/kw/bin/NAME to kwbox, which runs
+// kwcmd under any name but its own (guest/src/kwcmd.c, kwbox.c; the
+// directory is first on PATH), made by `kwbox cmd sync NAME...`, which
+// this runs through kwtty whenever the commands change. A guest process
+// that runs NAME is kwcmd under that name: a normal process
 // with its own pid, arguments, stdio and exit status, which connects to
 // vsock port 1020 here and relays. The handler runs on the thread that owns
 // the VM (inline and in worker mode alike), once per guest process.
@@ -29,7 +30,7 @@
 // catches no signal: when the guest process is killed the connection ends,
 // and the handler's `signal` aborts. A change goes in kwcmd.c too.
 
-import { guestRun } from "./mounts.ts";
+import { guestRun, KWBOX, noKwbox } from "./mounts.ts";
 import { PtyError, TTY_FLAG_CRITICAL, TTY_SIGNALS, TtyFrameParser, encodeTtyFrame, type ExecResult } from "./tty.ts";
 import type { Vsock, VsockConnection, VsockListener } from "./vsock.ts";
 import { errorText } from "./output.ts";
@@ -108,7 +109,7 @@ export type HostCommand = (ctx: HostCommandContext) => HostCommandResult | Promi
 export type CommandErrorCode =
 	/** The instance has no vsock device. */
 	| "ENODEV"
-	/** The guest has no kwcmd (an image from before host commands). */
+	/** The guest has no kwbox (a base from before it). */
 	| "ENOENT"
 	/** A name that is not a command name, or a handler that is not a function. */
 	| "EINVAL"
@@ -133,10 +134,10 @@ export class CommandError extends Error {
 /** createKernel's `commands`: names to handlers. */
 export type CommandsOption = Record<string, HostCommand>;
 
-/** @internal A command's name (kwcmd.c valid_name()): a file name of letters, digits and ". _ + -", not starting with "." or "-", at most 64 bytes, not "kwcmd". */
+/** @internal A command's name (kwcmd.c valid_name()): a file name of letters, digits and ". _ + -", not starting with "." or "-", at most 64 bytes, not "kwcmd" or "kwbox" (the guest runs those names itself). */
 export function checkCommandName(name: string): string {
-	if (typeof name !== "string" || !/^[A-Za-z0-9_+][A-Za-z0-9._+-]{0,63}$/.test(name) || name === "kwcmd")
-		throw new CommandError("EINVAL", `command name ${JSON.stringify(name)}: 1 to 64 letters, digits, ".", "_", "+" or "-", not starting with "." or "-"`);
+	if (typeof name !== "string" || !/^[A-Za-z0-9_+][A-Za-z0-9._+-]{0,63}$/.test(name) || name === "kwcmd" || name === "kwbox")
+		throw new CommandError("EINVAL", `command name ${JSON.stringify(name)}: 1 to 64 letters, digits, ".", "_", "+" or "-", not starting with "." or "-", and not "kwcmd" or "kwbox"`);
 	return name;
 }
 
@@ -304,7 +305,7 @@ export class CommandTable {
 	#log: (msg: string) => void;
 	#commands = new Map<string, HostCommand>();
 	#listener: VsockListener | undefined;
-	/** The guest's links are made to match #commands, one `kwcmd sync` at a time. */
+	/** The guest's links are made to match #commands, one `kwbox cmd sync` at a time. */
 	#syncing: Promise<void> = Promise.resolve();
 	/** createKernel's commands while their first sync runs: rejects if it failed. */
 	#boot: Promise<void> | undefined;
@@ -382,19 +383,19 @@ export class CommandTable {
 			if (this.#down) throw new CommandError("ECONNABORTED", "the kernel exited");
 			let r: ExecResult<string>;
 			try {
-				r = await guestRun(vsock, "kwcmd", ["sync", ...this.#commands.keys()], timeout);
+				r = await guestRun(vsock, KWBOX, ["cmd", "sync", ...this.#commands.keys()], timeout);
 			} catch (e) {
 				const code = e instanceof PtyError ? e.code : "";
 				const msg = (e as Error)?.message ?? String(e);
 				if (this.#down || code === "ECONNABORTED" || code === "ECONNRESET") throw new CommandError("ECONNABORTED", "host commands: the kernel exited", e);
 				if (code === "ETIMEDOUT") throw new CommandError("ETIMEDOUT", `host commands: ${/killed/.test(msg) ? msg : `no answer from the guest's kwtty within ${timeout} ms (an image without kwtty, or still booting?)`}`, e);
-				if (code === "EREMOTE" && /exec kwcmd: No such file/.test(msg)) throw new CommandError("ENOENT", "host commands: the guest has no /usr/bin/kwcmd (an image from before host commands)", e);
+				if (code === "EREMOTE" && noKwbox(msg)) throw new CommandError("ENOENT", `host commands: the guest has no ${KWBOX} (a base from before kwbox)`, e);
 				throw new CommandError("EREMOTE", `host commands: ${msg}`, e);
 			}
 			if (r.exitCode !== 0) {
 				// kwcmd's last line is "kwcmd: what: text (errno N)".
 				const text = (r.stderr || r.stdout).trim().split("\n").pop() ?? "";
-				throw new CommandError("EREMOTE", `host commands: ${text.replace(/^kwcmd: /, "").replace(/\s*\(errno \d+\)\s*$/, "") || `kwcmd sync exited with ${r.exitCode ?? `signal ${r.signal}`}`}`);
+				throw new CommandError("EREMOTE", `host commands: ${text.replace(/^kwcmd: /, "").replace(/\s*\(errno \d+\)\s*$/, "") || `kwbox cmd sync exited with ${r.exitCode ?? `signal ${r.signal}`}`}`);
 			}
 		});
 		this.#syncing = run.catch(() => {});

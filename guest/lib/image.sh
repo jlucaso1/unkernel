@@ -78,6 +78,10 @@ KW_PREFETCH_WHOLE_MAX="${KW_PREFETCH_WHOLE_MAX:-16777216}"
 # runs at the prompt: the first things a user types.
 KW_BOOT_FILES="${KW_BOOT_FILES:-etc/resolv.conf usr/share/terminfo/l/linux}"
 KW_BOOT_SCRIPT='ls -l / >/dev/null; cat /etc/os-release >/dev/null'
+# How the traced boots boot (guest/tools/vm-run.ts): as the page does, with a
+# network, kwshm and its command line, so that the boot set has what the
+# page's boot reads too (kw.wayland=1: wland's relay, where the image has one).
+KW_TRACE_BOOT=(--net --shm --append "kw.gl=1 kw.wayland=1")
 # The warm set (above): the distro's build.sh sets these; none by default.
 KW_WARM_SCRIPT="${KW_WARM_SCRIPT:-}"
 KW_WARM_EXCLUDE="${KW_WARM_EXCLUDE:-}"
@@ -177,13 +181,13 @@ distro_erofs() {
 			{ echo "distro: KW_DISTRO_TRACE=1 needs $base_bundle (kernel/build.sh base) and node" >&2; exit 1; }
 		rm -f "$out"
 		"${mkfs[@]}" -Enoinline_data "$out" "$tar"
-		node "$guest/tools/vm-run.ts" "$base_bundle" "$out" --net --timeout 300 --trace "$out.trace" "$KW_BOOT_SCRIPT" ||
+		node "$guest/tools/vm-run.ts" "$base_bundle" "$out" "${KW_TRACE_BOOT[@]}" --timeout 300 --trace "$out.trace" "$KW_BOOT_SCRIPT" ||
 			{ echo "distro: $name.erofs (uncompressed) does not boot (vm-run.ts)" >&2; exit 1; }
 		python3 -I "$guest/tools/erofs-trace.py" "$out" "$out.trace" > "$boot"
 		{ boot_files_header "$name"; cat "$boot"; } > "$rec"
 		echo "distro: $name: recorded $rec" >&2
 		if [ -n "$KW_WARM_SCRIPT" ]; then
-			node "$guest/tools/vm-run.ts" "$base_bundle" "$out" --net --timeout 600 --trace "$out.trace" \
+			node "$guest/tools/vm-run.ts" "$base_bundle" "$out" "${KW_TRACE_BOOT[@]}" --timeout 600 --trace "$out.trace" \
 				"$KW_BOOT_SCRIPT; $KW_WARM_SCRIPT" >/dev/null ||
 				{ echo "distro: the warm script fails in $name.erofs (uncompressed) (vm-run.ts)" >&2; exit 1; }
 			python3 -I "$guest/tools/erofs-trace.py" "$out" "$out.trace" > "$out.files"
@@ -303,7 +307,7 @@ distro_hint() {
 		[ "$cut" != 0 ] || cut=$size
 		trace="$img.trace"
 		if [ "${KW_DISTRO_TRACE:-0}" = 1 ]; then
-			node "$guest/tools/vm-run.ts" "$base_bundle" "$img" --net --timeout 300 --trace "$trace" "$KW_BOOT_SCRIPT" ||
+			node "$guest/tools/vm-run.ts" "$base_bundle" "$img" "${KW_TRACE_BOOT[@]}" --timeout 300 --trace "$trace" "$KW_BOOT_SCRIPT" ||
 				{ echo "distro: ${img##*/} does not boot (vm-run.ts)" >&2; exit 1; }
 		else
 			: > "$trace"

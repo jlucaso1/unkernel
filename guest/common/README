@@ -63,15 +63,20 @@ On the web page
 
   Ctrl-A ?          All the keyboard shortcuts (on a Mac, Cmd-A works
                     as well as Ctrl-A).
-  Ctrl-A n          Another terminal window, up to 9. Ctrl-A 1-9
-                    switches between them.
-  Ctrl-Shift-O      The demo launcher (Cmd-K on a Mac, or the arrow at
-                    the left of the status line).
-  Ctrl-A w          The Wayland desktop: "wland foot" runs foot (a
-                    Wayland app) as a window on the page.
+  Ctrl-A n          Another terminal, up to 9: a tab of the Terminal
+                    window (Ctrl-A N opens one in a new window).
+                    Ctrl-A 1-9 switches between them.
+  Ctrl-Shift-O      The app launcher (Cmd-K on a Mac, or the first
+                    tile of the Dock).
+@if debian
+  foot              Wayland apps started in a terminal show as windows
+                    on the page. Ctrl-A w switches between them and the
+                    other windows.
+@end
 
-The status icon opens options, diagnostics, and export or reset of the
-disk kept in your browser (IndexedDB). Open the page with ?data=0 for a
+Settings (Ctrl-A ,) has the machine's options and export, import or
+reset of the disk kept in your browser (IndexedDB); System (Ctrl-A s)
+has the kernel log and diagnostics. Open the page with ?data=0 for a
 fresh system every time.
 
 Limits

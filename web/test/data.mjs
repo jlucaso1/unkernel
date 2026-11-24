@@ -57,7 +57,8 @@ const BASE = "sed -n 's/^upper=//p; s/^why=//p' /run/kw-base";
 const diskInfo = (p) => p.evaluate(`JSON.stringify(KW.dataDisk && { persistent: KW.dataDisk.persistent, seeded: !!KW.dataDisk.seeded,
 	stored: KW.dataDisk.stored.size, mem: KW.dataDisk.mem.size, memBytes: KW.dataDisk.memBytes, notice: KW.dataDisk.notice ?? null,
 	stats: KW.dataDisk.stats, size: KW.dataDisk.size })`).then((s) => (s ? JSON.parse(s) : null));
-const panelText = (p) => p.evaluate("document.getElementById('data-status').textContent");
+/** The data disk's status line in Settings' Storage section (#data-status: in the document while Settings is closed too, sysapps.ts). */
+const storageStatus = (p) => p.evaluate("document.getElementById('data-status').textContent");
 
 const port = 23000 + Math.floor(Math.random() * 1000);
 const base = `http://127.0.0.1:${port}/`;
@@ -82,8 +83,8 @@ try {
 	let info = await diskInfo(a);
 	check("data disk attached persistently, created from the template", info?.persistent && info.seeded && info.size === 4 * 1024 ** 3,
 		JSON.stringify(info && { stored: info.stored, size: info.size }));
-	const panel = await panelText(a);
-	check("panel shows the data disk", /Saved in this browser/.test(panel), panel);
+	const status = await storageStatus(a);
+	check("Settings' Storage shows the data disk", /Saved in this browser/.test(status), status);
 	let r = await a.run(`sudo dmesg -n 1; sudo findfs LABEL=kwdata; ${MOUNT} && grep ' /mnt/kwdata ' /proc/mounts`);
 	check("the guest finds and mounts LABEL=kwdata", r.rc === 0 && /ext4/.test(r.out), r.out.replace(/\n/g, " | "));
 	const marker = `marker-${Date.now()}`;
@@ -166,8 +167,8 @@ try {
 		await load(b, home);
 		info = await diskInfo(b);
 		check("second tab: not persistent, with a notice", info && !info.persistent && /another tab/.test(await b.screen()), info?.notice);
-		const chk = await panelText(b);
-		check("second tab: the panel says so", /In memory only: open in another tab/.test(chk), chk);
+		const chk = await storageStatus(b);
+		check("second tab: Settings' Storage says so", /In memory only: open in another tab/.test(chk), chk);
 		r = await b.run(`${MOUNT} && cat /mnt/kwdata/marker.txt && echo tab2 | sudo tee /mnt/kwdata/tab2.txt >/dev/null && sync`);
 		check("second tab: sees the saved files (a copy)", r.out.includes(marker), r.out.replace(/\n/g, " | "));
 		r = await b.run("cat /etc/kw-overlay-test");

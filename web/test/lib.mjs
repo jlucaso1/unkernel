@@ -147,6 +147,8 @@ async function attachTarget(target, name, { shots } = {}) {
 			const u = new URL(url);
 			if (!u.searchParams.has("worker")) u.searchParams.set("worker", "0");
 			if (!u.searchParams.has("cpus")) u.searchParams.set("cpus", "1");
+			// The console stays up: the page would minimize an unused one a few seconds after boot (autohide.ts).
+			if (!u.searchParams.has("autohide")) u.searchParams.set("autohide", "0");
 			return send("Page.navigate", { url: u.href });
 		},
 		async waitFor(expr, what, ms = 90000) {

@@ -47,7 +47,8 @@ function latin1(b: Uint8Array): string {
 	return s;
 }
 
-function latin1Bytes(s: string): Uint8Array {
+/** A string of byte chars to bytes. */
+export function latin1Bytes(s: string): Uint8Array {
 	const b = new Uint8Array(s.length);
 	for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
 	return b;
@@ -61,7 +62,8 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
 }
 
 /** A buffered reader over the connection's readable. */
-class Input {
+/** A buffered reader over a connection (ws.ts reads frames through it after the head). */
+export class Input {
 	readonly #reader: ReadableStreamDefaultReader<Uint8Array>;
 	#buf: Uint8Array = EMPTY;
 	eof = false;
@@ -120,14 +122,15 @@ class Input {
 	}
 }
 
-interface Head {
+export interface Head {
 	status: number;
 	statusText: string;
 	headers: Array<[string, string]>;
 }
 
 /** One response head: status line and header lines. */
-async function readHead(input: Input): Promise<Head> {
+/** A status line and header block (names lowercased); throws on a malformed or oversized one. */
+export async function readHead(input: Input): Promise<Head> {
 	const left = () => HTTP_MAX_HEADER_BYTES - input.lineBytes;
 	let line = await input.readLine(left());
 	while (line === "") line = await input.readLine(left()); // stray CRLFs before a status line

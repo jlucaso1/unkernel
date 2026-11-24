@@ -2,9 +2,10 @@
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 /*
  * kwwasi: run a WebAssembly WASI program (wasm32-wasi, preview 1 or 0) on the
- * host's wasm engine (static aarch64 musl), /usr/bin/kwwasi in the base's kw
- * layer. /usr/lib/kw/rc registers it with binfmt_misc for the magic
- * "\0asm\1\0\0\0" with flag P, so the kernel runs it as
+ * host's wasm engine (static aarch64 musl), /usr/lib/kw/kwwasi in the
+ * base's kw layer (a link to kwbox, kwbox.c). /usr/lib/kw/rc registers it
+ * with binfmt_misc for the magic "\0asm\1\0\0\0" with flag P, so the
+ * kernel runs it as
  *
  *   kwwasi PATH ARGV0 [ARG...]
  *

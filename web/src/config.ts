@@ -6,11 +6,11 @@
 //
 // The settings below are kept in localStorage (SETTINGS_KEY: {name: value},
 // only those that differ from the defaults). Each one except ?simulate,
-// ?showcase and ?routes has a control under Options in the status panel; Reboot saves
+// ?showcase, ?routes and ?autohide has a control in Settings (Options.tsx); Reboot saves
 // them there (ui.ts nextSettings()) and loads the page's bare URL. A URL
 // parameter of the same name overrides the saved one for that load (links,
-// the browser tests); the page never writes the URL. ?simulate, ?showcase
-// and ?routes are read from the URL only.
+// the browser tests); the page never writes the URL. ?simulate, ?showcase,
+// ?routes and ?autohide are read from the URL only.
 //
 //   ?mem=MiB                           kernel memory (default: auto, from the SDK's autoMemoryMiB():
 //                                      512 on phones, 2048 otherwise, less on low-memory devices)
@@ -33,9 +33,16 @@
 //                                      kernel bundle's section unkernel.datadisk. One tab at a
 //                                      time: another tab gets an unsaved in-memory copy.
 //                                      KW.exportData(), KW.importData(file), KW.resetData() (also
-//                                      buttons in the panel). Hiding or leaving the page and
+//                                      buttons in Settings). Hiding or leaving the page and
 //                                      Reboot ask the guest to sync first (KW.sync(), the SDK's
 //                                      sync()).
+//   ?datasize=<GiB>                    the data disk's size, 4 (the default, the template's) to
+//                                      1024: a new disk is made this large, a saved one grows to
+//                                      it at the next boot without a suspended session to resume
+//                                      (it never shrinks), and the guest's /init grows /data to
+//                                      fill it. Space in IndexedDB is used only as /data fills;
+//                                      the size is clamped to the browser's quota for the page
+//                                      (Settings, Storage: Disk size; DATA_SIZES, dataSizeCap()).
 //   ?display=0                         no display. By default the guest gets /dev/fb0 (kwfb,
 //                                      640x480), and a canvas over the terminal shows it while a
 //                                      program has it open (try `glimmer`). Nothing is
@@ -67,12 +74,22 @@
 //                                      3D on the device where it gets one. Off with another
 //                                      distro, without WebGL2 on the page's thread, or in a build
 //                                      without the renderer (glBlocker()).
+//   ?vk=0 | ?vk=1                      guest Vulkan (Debian only; default on where the page's
+//                                      thread has WebGPU, navigator.gpu): the guest's Vulkan
+//                                      loader finds the base's ICD (libvulkan_kw.so), which
+//                                      talks over vsock port 1018 to a renderer on this
+//                                      browser's WebGPU (the SDK's createKernel({ vk }),
+//                                      .agents/vk.md). Nothing of it (the renderer's modules,
+//                                      kwvk-naga.wasm) is fetched before the guest's first
+//                                      Vulkan instance. Off with another distro, without
+//                                      navigator.gpu, or in a build without kwvk-naga.wasm
+//                                      (vkBlocker()).
 //   ?gpu=0                             with guest GL, this load only: no virtio-gpu device, so the
 //                                      guest's shells use the vtest link (guest GL as it was
 //                                      before the device, for comparison). Also none with
 //                                      ?display=0.
 //   ?shm=0                             this load only: no kwshm device, so no Wayland desktop
-//                                      (wayland.ts; the launcher's Wayland demos are disabled).
+//                                      (wayland.ts; the launcher's Wayland apps are disabled).
 //                                      A resumed session keeps the device it was saved with.
 //   ?wlgpu=0                           this load only: the Wayland desktop takes no GPU buffers
 //                                      (no gpu source for wland: GL apps render in software,
@@ -88,7 +105,7 @@
 //                                      safe (.agents/gl.md, Busy waits).
 //   ?root=initramfs                   safe mode for this boot (kw.root=initramfs): the plain
 //                                      image root instead of the overlay root; /data stays
-//                                      mounted (the panel's Safe mode button; .agents/data-disk.md)
+//                                      mounted (Settings' Safe mode button; .agents/data-disk.md)
 //   ?worker=1                          run the kernel in a Web Worker (the SDK's
 //                                      createKernel({ worker: true })), so it never blocks the
 //                                      page. The data disk and the Wisp network are built in the
@@ -117,8 +134,8 @@
 //                                      another count offers to reload on N: CPUS_ONCE_KEY).
 //                                      Default in worker mode: the suggested count (half the
 //                                      threads, at most SUGGESTED_CPUS: 4 on desktops, 2 in
-//                                      Firefox; one on phones, on fewer than 4 threads and in
-//                                      WebKit, where several CPUs ran slower), else one.
+//                                      Firefox and on phones; one on fewer than 4 threads),
+//                                      else one.
 //                                      ?cpus=1: one CPU, the UP kernel.
 //   ?autosuspend=now|<s>|0             save the machine and pause it by itself once the tab has been
 //                                      hidden that long (now: at once; seconds; 0: never); it goes
@@ -129,11 +146,15 @@
 //                                      discarded at any time), off elsewhere.
 //   ?askleave=0                        no question when the page is closed or left while such a
 //                                      machine runs (beforeunload; staying suspends)
-//   ?showcase[=warm,<step>,...]        URL only: a fast scripted tour of the demos with captions;
+//   ?showcase[=warm,<step>,...]        URL only: a fast scripted tour of the apps with captions;
 //                                      warm pre-installs them, step ids pick a subset
 //                                      (showcase.ts); read in launcher.ts
+//   ?autohide=0|1                      URL only: 0: the console never minimizes itself after
+//                                      boot; 1: it does even where Settings > Desktop turned it
+//                                      off or automation drives the browser (navigator.webdriver,
+//                                      off by default there); read in autohide.ts
 //   ?simulate=nojspi,oom,lowmem        URL only: fake a failure (for tests)
-import { DEFAULT_MEMORY_FALLBACK_MIB, autoMemoryMiB, glUrl, kernelSmpUrl, kernelUrl, webCpuBlocker } from "./sdk.ts";
+import { DEFAULT_MEMORY_FALLBACK_MIB, autoMemoryMiB, glUrl, kernelSmpUrl, kernelUrl, vkShaderUrl, webCpuBlocker } from "./sdk.ts";
 import { distros as DISTROS } from "virtual:unkernel-kernel";
 import { autoSuspendDefault, parseAutoSuspend } from "./autosuspend.ts";
 
@@ -159,10 +180,38 @@ export const DEFAULT_DISTRO = DISTROS_OFFERED.find((d) => d.name === "debian")?.
  */
 export const DEFAULT_ROUTES: Readonly<Record<string, string>> = Object.freeze({
 	"deb.debian.org": "https://mirror.unkernel.dev/deb",
+	// The mirror's other paths, under its own name: /github/OWNER/REPO/releases/download/TAG/ASSET
+	// (llama.cpp's and Ollama's) and /ollama/v2/library/NAME/{manifests/TAG,blobs/sha256:HEX}
+	// (Ollama's registry), which the llama.cpp and Ollama apps' scripts ask first (apps/agents), and
+	// /claude, /nodejs, /opencode, /astral and /github/astral-sh/uv, which the install shim asks
+	// first where the name resolves to a routed address (guest/base/rootfs/usr/lib/kw/shim).
+	"mirror.unkernel.dev": "https://mirror.unkernel.dev",
+	// Ladybird's apt repository (apps/browsers/ladybird.ts), as Debian's.
+	"apt.ladybird.org": "https://mirror.unkernel.dev/ladybird",
 });
 
 /** The project's source, linked from About and the boot notes. */
 export const REPO = "https://github.com/pithings/unkernel";
+
+/** The data disk sizes Settings offers, in GiB; the first is the default (the template's size). */
+export const DATA_SIZES: readonly number[] = [4, 8, 16, 32, 64];
+export const DATA_SIZE_DEFAULT = DATA_SIZES[0]!;
+
+/**
+ * The largest data disk size in GiB for a storage quota in bytes
+ * (navigator.storage.estimate(); undefined: none known): the quota rounded
+ * down, but at least the default and the saved disk's size (`have`, GiB),
+ * since a disk never shrinks.
+ */
+export function dataSizeCap(quota: number | undefined, have = 0): number {
+	return quota === undefined ? Infinity : Math.max(DATA_SIZE_DEFAULT, have, Math.floor(quota / 1073741824));
+}
+
+/** ?datasize=: whole GiB from 4 to 1024, else the default. */
+function dataSizeParam(v: string | null): number {
+	const n = v !== null && /^\d+$/.test(v) ? Number(v) : NaN;
+	return n >= DATA_SIZE_DEFAULT && n <= 1024 ? n : DATA_SIZE_DEFAULT;
+}
 
 /** The command line without ?append=. */
 export const DEFAULT_CMDLINE = "console=hvc0 rdinit=/init";
@@ -170,7 +219,7 @@ export const DEFAULT_CMDLINE = "console=hvc0 rdinit=/init";
 /** localStorage: the saved settings (the header above), a JSON object of strings. */
 export const SETTINGS_KEY = "kw.settings";
 /** The settings' names. ?net=0 is read as ?wisp=0 and never saved. */
-export const SETTING_NAMES: readonly string[] = ["mem", "append", "net", "wisp", "jit", "verbose", "display", "sound", "data", "distro", "root", "worker", "shared", "cpus", "autosuspend", "askleave", "gl"];
+export const SETTING_NAMES: readonly string[] = ["mem", "append", "net", "wisp", "jit", "verbose", "display", "sound", "data", "datasize", "distro", "root", "worker", "shared", "cpus", "autosuspend", "askleave", "gl", "vk"];
 
 /** The saved settings ({} where there are none or localStorage refuses). */
 export function loadSettings(): Record<string, string> {
@@ -234,6 +283,8 @@ export interface Config {
 	sound: boolean;
 	/** Attach the data disk (?data=0 turns it off). */
 	data: boolean;
+	/** The data disk's size in GiB (?datasize=; DATA_SIZE_DEFAULT): openDataDisk()'s `size`. */
+	dataSizeGiB: number;
 	/** ?root=initramfs: safe mode (kw.root=initramfs) for this boot, else null. */
 	root: "initramfs" | null;
 	/** The kernel runs in a Web Worker (with the data disk, network, display, input and sound): ?worker=1, or more than one CPU. */
@@ -290,14 +341,25 @@ export interface Config {
 	glStrictWaits: boolean;
 	/** With guest GL, the virtio-gpu device (createKernel({ gpu })): unless ?gpu=0 or ?display=0. */
 	gpu: boolean;
+	/** Guest Vulkan this load (the Vulkan option, on a distro of VK_DISTROS, where vkBlocker() allows). */
+	vk: boolean;
+	/** The Vulkan option: ?vk=1, or by default (?vk=0: off). */
+	vkParam: boolean;
+	/** The Vulkan option was set (?vk= in the URL or the saved settings), not the default. */
+	vkAsked: boolean;
+	/** Why this page cannot offer guest Vulkan (vkBlocker()), or null. */
+	vkBlocked: string | null;
+	/** Why this load runs without Vulkan although the option asks for it, or null. */
+	vkWhy: string | null;
 	/** kwshm, for the Wayland desktop (wayland.ts): unless ?shm=0 (this load's URL only). */
 	shm: boolean;
-	/** The Wayland desktop shows GPU apps' buffers by resource (wayland.ts): unless ?wlgpu=0 (this load's URL only). */
+	/** The Wayland desktop shows GPU apps' buffers by resource and Vulkan apps' external buffers (wayland.ts): unless ?wlgpu=0 (this load's URL only). */
 	wlGpu: boolean;
 	/** Ask before the page is closed or left while a used machine runs (?askleave=0: never). */
 	askLeave: boolean;
 	/** A touch device or a mobile user agent. */
 	mobile: boolean;
+	/** A coarse primary pointer (touch): the page focuses nothing by itself (a terminal, a field), which would raise the on-screen keyboard. */
 	coarse: boolean;
 	mobileUA: boolean;
 	fontSize: number;
@@ -321,6 +383,42 @@ export function glBlocker(): string | null {
 	if (!glUrl) return "this page's build has no GL renderer (virgl.mjs: gl/wasm/build.sh, or a release that carries it)";
 	if (typeof OffscreenCanvas !== "function" || typeof WebGL2RenderingContext !== "function") return "this browser has no WebGL2 on the page's thread (OffscreenCanvas)";
 	return null;
+}
+
+/** The distros the page offers guest Vulkan on (Debian's loader and vulkan-tools; Alpine is untested). */
+export const VK_DISTROS: readonly string[] = ["debian"];
+
+/**
+ * Why this page cannot offer guest Vulkan, or null: no translator in the
+ * page's build (sdk.ts vkShaderUrl; web/scripts/kernel.ts), or no WebGPU on
+ * the page's thread, where the renderer runs in both modes (navigator.gpu;
+ * whether the browser then gives an adapter shows at the guest's first
+ * Vulkan instance).
+ */
+export function vkBlocker(): string | null {
+	if (!vkShaderUrl) return "this page's build has no Vulkan translator (kwvk-naga.wasm: vk/naga/build.sh, or a release that carries it)";
+	if (!(navigator as { gpu?: unknown }).gpu) return "this browser has no WebGPU on the page's thread (navigator.gpu)";
+	return null;
+}
+
+/**
+ * Why this browser's WebGPU cannot serve guest Vulkan although navigator.gpu
+ * is there, or null: requestAdapter() gives no adapter (Chrome on Linux
+ * without its WebGPU flags, a blocklisted GPU or driver, no GPU process).
+ * Asked once at boot (boot.ts), which then runs without guest Vulkan and
+ * says why (the Environment row, the option's note, the launcher's Vulkan
+ * apps); the request makes no device. No answer in 3 s counts as an adapter.
+ */
+export async function vkAdapterBlocker(): Promise<string | null> {
+	const gpu = (navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+	if (!gpu) return null; // vkBlocker() said so
+	try {
+		const adapter = await Promise.race([gpu.requestAdapter(), new Promise((r) => setTimeout(() => r(true), 3000))]);
+		if (adapter) return null;
+	} catch {
+		// As no adapter.
+	}
+	return "this browser's WebGPU has no adapter (navigator.gpu.requestAdapter() gives none: see chrome://gpu; Chrome on Linux needs chrome://flags/#enable-unsafe-webgpu and #enable-vulkan)";
 }
 
 /** The kernel's limit (NR_CPUS in kw_smp.config). */
@@ -347,12 +445,13 @@ export function smpBlocker(): string | null {
  * Chrome): 4 CPUs ran 4-wide work 2.5x and 8-wide 3.5x as fast as one; 8
  * CPUs only gained on 8-wide work (4-5x), 14 no more, for 3-7% on
  * single-threaded work, 40 ms more boot per CPU past 4 and 9 MiB each.
- * Firefox and phones are not measured yet: two and one. WebKit
- * (webkitEngine()) suggests none: in desktop Safari 27.2 (same machine,
- * 2026-11-19) parallel work got slower with every CPU added (8 CPUs: 0.25-0.4x
- * of one), so it boots one by default.
+ * Firefox is not measured yet: two. Desktop Safari 27.2 (same machine,
+ * 2026-11-23, /smp-probe.html): 3.3-3.5x on 4 CPUs and 5.2-5.8x on 8,
+ * against Chrome's 3.4-3.6x and 5.4-6.9x. Phones: two (an iPhone 15 Pro,
+ * two fast cores, 4 threads reported: 1.3-1.6x on 2 CPUs, 1.8-2.0x on 4,
+ * which would leave the browser no thread of its own).
  */
-export const SUGGESTED_CPUS = { desktop: 4, firefox: 2, mobile: 1 };
+export const SUGGESTED_CPUS = { desktop: 4, firefox: 2, mobile: 2 };
 
 /** JavaScriptCore: Safari, and every browser on iOS (CriOS and FxiOS are WebKit too, without "Chrome/"). */
 export function webkitEngine(ua = navigator.userAgent): boolean {
@@ -375,14 +474,19 @@ function takeOnce(key: string): string | null {
 	}
 }
 
+const isCoarse = (): boolean => typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+const isMobileUA = (): boolean => typeof navigator !== "undefined" && /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent);
+/** A touch device or a mobile user agent (Config.mobile). */
+export const isMobile = (): boolean => isCoarse() || isMobileUA();
+
 export function readConfig(search: string = location.search, saved: Record<string, string> = loadSettings()): Config {
 	const url = new URLSearchParams(search);
 	const params = new URLSearchParams(saved);
 	for (const k of SETTING_NAMES) if (url.has(k)) params.set(k, url.get(k)!);
 	if (params.get("net") === "0") params.set("wisp", "0");
 	params.delete("net");
-	const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
-	const mobileUA = /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent);
+	const coarse = isCoarse();
+	const mobileUA = isMobileUA();
 	const mobile = coarse || mobileUA;
 	const memParam = params.get("mem");
 	const auto = autoMemoryMiB({ mobile });
@@ -407,7 +511,7 @@ export function readConfig(search: string = location.search, saved: Record<strin
 	const cpuMax = Math.max(1, Math.min(MAX_CPUS, hc));
 	const cap = mobile ? SUGGESTED_CPUS.mobile : /Firefox\//.test(navigator.userAgent) ? SUGGESTED_CPUS.firefox : SUGGESTED_CPUS.desktop;
 	const half = Math.min(cap, Math.floor(hc / 2));
-	const cpuSuggested = half >= 2 && !webkitEngine() ? Math.min(half, cpuMax) : 0;
+	const cpuSuggested = half >= 2 ? Math.min(half, cpuMax) : 0;
 	const smpBlocked = smpBlocker();
 	const cpuDefault = !smpBlocked && workerParam && cpuSuggested ? cpuSuggested : 1;
 	const smpParam = params.has("cpus") ? Math.max(1, Math.min(MAX_CPUS, Math.floor(Number(params.get("cpus"))) || 1)) : cpuDefault;
@@ -432,6 +536,11 @@ export function readConfig(search: string = location.search, saved: Record<strin
 	const glParam = glAsked ? params.get("gl") === "1" : glDefault(params.get("display") !== "0");
 	const glBlocked = glBlocker();
 	const glWhy = !glParam ? null : glBlocked ?? (GL_DISTROS.includes(distro?.name ?? "none") ? null : `guest GL needs ${GL_DISTROS.join(" or ")} (its Mesa has the virgl driver), not ${distro?.name ?? "the base shell"}`);
+	// Guest Vulkan: on by default where WebGPU is (the renderer loads on the guest's first Vulkan instance).
+	const vkAsked = params.has("vk");
+	const vkParam = vkAsked ? params.get("vk") === "1" : true;
+	const vkBlocked = vkBlocker();
+	const vkWhy = !vkParam ? null : vkBlocked ?? (VK_DISTROS.includes(distro?.name ?? "none") ? null : `guest Vulkan needs ${VK_DISTROS.join(" or ")}, not ${distro?.name ?? "the base shell"}`);
 	return {
 		settings: Object.fromEntries(params),
 		kernelUrl: kernelUrl.pathname,
@@ -455,6 +564,7 @@ export function readConfig(search: string = location.search, saved: Record<strin
 		display: params.get("display") !== "0",
 		sound: params.get("sound") !== "0",
 		data: params.get("data") !== "0",
+		dataSizeGiB: dataSizeParam(params.get("datasize")),
 		root,
 		worker: workerParam || cpus > 1,
 		workerParam,
@@ -486,6 +596,11 @@ export function readConfig(search: string = location.search, saved: Record<strin
 		// Not settings (SETTING_NAMES): this load's URL only.
 		glStrictWaits: url.get("glwait") === "strict",
 		gpu: glParam && !glWhy && url.get("gpu") !== "0" && params.get("display") !== "0",
+		vk: vkParam && !vkWhy,
+		vkParam,
+		vkAsked,
+		vkBlocked,
+		vkWhy,
 		shm: url.get("shm") !== "0",
 		wlGpu: url.get("wlgpu") !== "0",
 		mobile,

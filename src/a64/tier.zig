@@ -162,10 +162,19 @@ pub fn pcAt(cpu: *Cpu, b: *const Block, k: usize) u64 {
 /// unit tests (two struct kw_cpu on one memory, one thread).
 pub const multi_cpu = c.smp or builtin.is_test;
 
-var code_epoch: u64 = 0;
+/// The epoch has two cache lines' worth of bytes to itself (128 on Apple's
+/// cores), so that polling it never waits for a neighbour's writer.
+var code_epoch: extern struct { v: u64 align(128) = 0, pad: [120]u8 = @splat(0) } = .{};
 
+/// A plain load, not an atomic one: every CPU polls this one word at every
+/// block end, and JavaScriptCore runs a wasm atomic load as a
+/// read-modify-write, which made the CPUs take the cache line from each
+/// other (iPhone 15 Pro, 2026-11-23: 4 CPUs ran user code at 0.35x of one).
+/// A CPU sees a bump at the latest at its next poll after the store reaches
+/// it; should an engine hoist the load out of a compiled self-loop, that is
+/// the loop's next exit (an interrupt, so within a tick).
 inline fn epochNow() u64 {
-    return @atomicLoad(u64, &code_epoch, .seq_cst);
+    return @as(*const volatile u64, &code_epoch.v).*;
 }
 
 /// Called by kw_cpu_init and kw_host_reset: this CPU has seen every change
@@ -173,7 +182,7 @@ inline fn epochNow() u64 {
 pub fn epochInit(cpu: *Cpu) void {
     if (!multi_cpu) return;
     cpu.priv.a64.seen_epoch = epochNow();
-    cpu.priv.a64.epoch_ptr = @intFromPtr(&code_epoch);
+    cpu.priv.a64.epoch_ptr = @intFromPtr(&code_epoch.v);
 }
 
 /// Retire everything if another CPU invalidated code since this one last
@@ -200,7 +209,7 @@ pub inline fn quiet(cpu: *Cpu) bool {
 /// IC IVAU of `va` (branch.icIvau, the reference and `generic` ops alike).
 pub fn icIvau(cpu: *Cpu, va: u64) void {
     if (multi_cpu) {
-        const old = @atomicRmw(u64, &code_epoch, .Add, 1, .seq_cst);
+        const old = @atomicRmw(u64, &code_epoch.v, .Add, 1, .seq_cst);
         // This CPU is current if it was before: it invalidates here.
         if (old == cpu.priv.a64.seen_epoch) cpu.priv.a64.seen_epoch = old +% 1;
     }

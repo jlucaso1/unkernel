@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 // The extra-keys bar: phones only, and only while the on-screen keyboard is
-// up (App.tsx decides). Esc, Tab, a latching Ctrl, ^C, arrows, a few symbols
-// and Paste. The display's soft keyboard (Display.tsx) shows one too, with
-// its own press (key presses for the guest) and without Paste there.
+// up (App.tsx decides). Esc, Tab, a latching Ctrl, ^C, the page's shortcut
+// prefix (^A: arms it, keys.ts, as Ctrl-A on a keyboard does, and the
+// shortcuts HUD shows; again disarms it), arrows, a few symbols and Paste.
+// The display's soft keyboard (Display.tsx, Pad.tsx) shows one too, with its own press
+// (key presses for the guest), without the prefix key and without Paste there.
 import { useRef, type MouseEvent, type TouchEvent } from "react";
 import { KW } from "../kw.ts";
+import { PREFIX, PREFIX_SHORT } from "../keys.ts";
 import { useStore } from "../store.ts";
 
 type K = { key: string; label: string; word?: boolean; aria?: string; title?: string } | "gap";
 const KEYS: K[] = [
 	{ key: "esc", label: "Esc", word: true }, { key: "tab", label: "Tab", word: true },
 	{ key: "ctrl", label: "Ctrl", word: true }, { key: "^c", label: "^C", word: true, title: "Ctrl-C" },
+	{ key: "prefix", label: PREFIX_SHORT, word: true, title: `${PREFIX}: the page's shortcuts` },
 	"gap",
 	{ key: "left", label: "←", aria: "Left" }, { key: "up", label: "↑", aria: "Up" },
 	{ key: "down", label: "↓", aria: "Down" }, { key: "right", label: "→", aria: "Right" },
@@ -32,6 +36,7 @@ export function Keys({ show, onPress, omit, className = "" }: {
 } = {}) {
 	const ctrl = useStore((s) => s.ctrl);
 	const keysOn = useStore((s) => s.keysOn);
+	const prefix = useStore((s) => s.prefix);
 	const on = show ?? keysOn;
 	// Keep focus (and so the on-screen keyboard) on the terminal: a mouse
 	// press is cancelled at mousedown; a tap is handled at touchend, whose
@@ -55,12 +60,12 @@ export function Keys({ show, onPress, omit, className = "" }: {
 			}}
 			onClick={(e) => press(keyOf(e))}
 		>
-			{KEYS.filter((k) => k === "gap" || !omit?.includes(k.key)).map((k, i) => k === "gap"
+			{KEYS.filter((k) => k === "gap" || (!omit?.includes(k.key) && !(onPress && k.key === "prefix"))).map((k, i) => k === "gap"
 				? <span key={i} className="mx-px my-2 w-px flex-none bg-line" />
 				: (
 					<button
 						key={k.key} type="button" data-key={k.key} aria-label={k.aria} title={k.title}
-						aria-pressed={k.key === "ctrl" ? ctrl : undefined}
+						aria-pressed={k.key === "ctrl" ? ctrl : k.key === "prefix" ? prefix : undefined}
 						className={`h-9.5 min-w-9 flex-[1_0_auto] touch-manipulation border border-line bg-surface px-2 text-fg active:bg-hover aria-pressed:border-fg aria-pressed:bg-fg aria-pressed:text-black ${k.word ? "text-[12.5px] font-medium" : "font-mono text-[16px]"}`}
 					>{k.label}</button>
 				))}

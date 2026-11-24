@@ -1,0 +1,32 @@
+#!/run/kw-lower/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
+
+# /usr/local/bin/Xwayland (the kw layer): runs the distro's Xwayland
+# (/usr/bin/Xwayland) and gives its root window a pointer. Xwayland's root
+# window has no cursor, which every X window that sets none of its own
+# inherits (the Athena widgets' apps: xeyes, XPaint, twm's desktop), so the
+# compositor hides the pointer over them (in the page: no pointer at all).
+# When Xwayland is given a display (:N), this sets the root window's cursor
+# to left_ptr (xsetroot, from x11-xserver-utils; nothing without it) once
+# the display's socket is there. A server that resets when its last client
+# leaves (no -noreset) forgets it if xsetroot was that client. Found first
+# on PATH (before /usr/bin; sudo's secure_path too), so whatever starts
+# Xwayland by name gets it: a shell, a launcher app, xwayland-satellite.
+
+real=/usr/bin/Xwayland
+[ -x $real ] || { echo "Xwayland: not installed (Debian: sudo apt-get install xwayland)" >&2; exit 127; }
+d=
+for a; do case $a in :[0-9]*) d=${a#:}; break ;; esac; done
+if [ -n "$d" ] && [ -x /usr/bin/xsetroot ] && [ ! -e "/tmp/.X11-unix/X$d" ]; then
+	(
+		i=0
+		while [ ! -S "/tmp/.X11-unix/X$d" ]; do
+			i=$((i + 1))
+			[ $i -gt 300 ] && exit 0
+			sleep 0.1
+		done
+		DISPLAY=:$d /usr/bin/xsetroot -cursor_name left_ptr 2>/dev/null
+	) </dev/null >/dev/null 2>&1 &
+fi
+exec $real "$@"

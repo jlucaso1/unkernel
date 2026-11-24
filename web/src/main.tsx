@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 // Page entry: read the configuration from the URL (config.ts), set up the
-// chrome (ui.ts, and its React components in components/), run the feature
-// preflight with the SDK's checkSupport(),
-// and only then load the boot module (boot.ts: wterm, the kernel). A
-// browser without JSPI gets the panel with the reason and a hint, without
-// downloading the kernel; a boot module that fails to load is reported the
-// same way.
+// chrome (ui.ts, and its React components in components/: the desktop
+// replaces index.html's static first paint of it in the same frame), run the
+// feature preflight with the SDK's checkSupport() while the boot module
+// (boot.ts: wterm, the kernel) loads, and start that module only once the
+// preflight passed. A browser without JSPI gets System's Errors with the
+// reason and a hint, without downloading the kernel; a boot module that
+// fails to load is reported the same way.
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { App } from "./components/App.tsx";
 import { readConfig } from "./config.ts";
+import { initDrop } from "./drop.ts";
 import { KW } from "./kw.ts";
 import { previewEscape } from "./preview.ts";
 import { checkSupport } from "./sdk.ts";
@@ -25,7 +27,7 @@ if (back) {
 	await new Promise(() => {});
 }
 
-// A macOS window has round bottom corners, which the status line runs into
+// A macOS window has round bottom corners, which the Dock runs into
 // (style.css, .mac-window); a fullscreen window covers the whole screen and
 // has none. An iPad reports Macintosh too, with touch points.
 if (/Macintosh/.test(navigator.userAgent) && !navigator.maxTouchPoints) {
@@ -39,13 +41,14 @@ if (/Macintosh/.test(navigator.userAgent) && !navigator.maxTouchPoints) {
 const cfg = (KW.config = readConfig());
 const ui = createUi(cfg);
 KW.ui = ui;
-// Rendered at once (it replaces index.html's fallback markup), so boot.ts
-// finds the terminal's element.
+// Rendered at once (it replaces index.html's static desktop, which it draws
+// the same), so boot.ts finds the terminal's element.
 flushSync(() => createRoot(document.getElementById("root")!).render(<App />));
+initDrop();
 
 async function preflight(): Promise<boolean> {
 	ui.stage("preflight", "active");
-	ui.splash("Checking browser", "Testing WebAssembly features…");
+	ui.bootStep("Checking the browser");
 	let fatalFail: { title: string; why: string } | null = null;
 	const need = (id: string, label: string, ok: boolean, why: string, title: string) => {
 		ui.check(id, label, ok ? "pass" : "fail", ok ? "yes" : "no", ok ? "" : why);
@@ -97,15 +100,18 @@ async function preflight(): Promise<boolean> {
 for (const e of KW.errors.slice()) ui.onError(e);
 
 if (ui.state() !== "error") {
+	// Fetched while the preflight runs (it has no side effects until start()); its failure counts only once the preflight passed.
+	const boot = import("./boot.ts");
+	boot.catch(() => {});
 	preflight().then(async (ok) => {
 		if (!ok) return;
-		ui.splash("Loading", "Boot script…");
+		ui.bootStep("Loading");
 		const timer = setTimeout(() => {
 			if (!KW.started) ui.fail("watchdog", "The boot module did not start within 20 s", "No error was reported; module scripts may be blocked or very slow to load.");
 		}, 20000);
 		let mod: typeof import("./boot.ts");
 		try {
-			mod = await import("./boot.ts");
+			mod = await boot;
 		} catch (e) {
 			clearTimeout(timer);
 			ui.fail("resource", `Failed to load the boot module (boot.ts, wterm and the kernel runtime): ${(e as Error).message}`, (e as Error).stack, { title: "A page script failed to load" });

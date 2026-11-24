@@ -2,10 +2,11 @@
 # Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 # /etc/inittab of the base shell (busybox init; /init starts it
 # when there is no distro to boot): a root shell on the console, and kwtty
-# for the host's terminal sessions over vsock.
+# for the host's terminal sessions over vsock once DHCP is done (net wait),
+# so that programs the host starts (vm.exec()) find the network up.
 
 ::sysinit:/kw/lib/sysinit
 hvc0::respawn:-/bin/sh
-::respawn:/usr/bin/kwtty serve
+::respawn:/bin/sh -c "/usr/lib/kw/net wait 2>/dev/null; exec /usr/bin/kwbox tty serve"
 ::ctrlaltdel:/bin/reboot
 ::shutdown:/usr/lib/kw/shutdown

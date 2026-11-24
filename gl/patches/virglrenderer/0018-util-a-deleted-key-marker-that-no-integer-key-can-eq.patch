@@ -1,0 +1,70 @@
+From cb134fe35d2780ad12011b0748f0cfe6953c7077 Mon Sep 17 00:00:00 2001
+From: Pooya Parsa <pooya@pi0.io>
+Date: Sun, 22 Nov 2026 13:59:04 +0000
+Subject: [PATCH] util: a deleted-key marker that no integer key can equal
+
+util_hash_table's keys are integers cast to pointers (vrend's object
+handles, resource and context ids), and Mesa's hash table marks a deleted
+slot with the address of a static variable. On a 64-bit host no id reaches
+such an address; on wasm32 the variable sits low in the data segment (62592
+in one build), so the object whose handle had that value was inserted as a
+deleted slot and never found. Mesa's virgl hands out handles from one
+counter, about one per frame for a KMS client's surfaces, so a long-running
+client got "Illegal surface 62592" from vrend_set_framebuffer_state and its
+context stayed in error (glmark2-es2-drm in its 31st scene).
+
+Mark deleted slots with UINTPTR_MAX, refuse it as a key, and fail an object
+insert the table refused instead of reporting the handle as inserted.
+---
+ src/gallium/auxiliary/util/u_hash_table.c | 11 +++++++++--
+ src/vrend/vrend_object.c                  |  5 ++++-
+ 2 files changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/src/gallium/auxiliary/util/u_hash_table.c b/src/gallium/auxiliary/util/u_hash_table.c
+index 2b7a67d..2697c70 100644
+--- a/src/gallium/auxiliary/util/u_hash_table.c
++++ b/src/gallium/auxiliary/util/u_hash_table.c
+@@ -73,7 +73,14 @@ util_hash_table_create(uint32_t (*hash)(const void *key),
+       ralloc_free(ht);
+       return NULL;
+    }
+-   
++
++   /* Keys here are integers cast to pointers (object handles, resource and
++    * context ids). The default deleted-key marker is the address of a static
++    * variable, which a 32-bit host (wasm32) places where an id can be: the
++    * object with that handle was then never found. Use a value that is
++    * neither an address nor an accepted key. */
++   _mesa_hash_table_set_deleted_key(&ht->table, (void *)UINTPTR_MAX);
++
+    ht->destroy = destroy;
+    
+    return ht;
+@@ -91,7 +98,7 @@ util_hash_table_set(struct util_hash_table *ht,
+    if (!ht)
+       return PIPE_ERROR_BAD_INPUT;
+ 
+-   if (!key)
++   if (!key || key == ht->table.deleted_key)
+       return PIPE_ERROR_BAD_INPUT;
+ 
+    key_hash = ht->table.key_hash_function(key);
+diff --git a/src/vrend/vrend_object.c b/src/vrend/vrend_object.c
+index 084e4ff..74225ac 100644
+--- a/src/vrend/vrend_object.c
++++ b/src/vrend/vrend_object.c
+@@ -103,7 +103,10 @@ vrend_object_insert(struct util_hash_table *handle_hash,
+    obj->handle = handle;
+    obj->data = data;
+    obj->type = type;
+-   util_hash_table_set(handle_hash, intptr_to_pointer(obj->handle), obj);
++   if (util_hash_table_set(handle_hash, intptr_to_pointer(obj->handle), obj) != PIPE_OK) {
++      free(obj);
++      return 0;
++   }
+    return obj->handle;
+ }
+ 
+-- 
+2.56.0
+

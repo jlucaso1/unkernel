@@ -1,30 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 // The page chrome's imperative side: the API that main.ts and boot.ts drive
-// (KW.ui: state, boot stages, environment checks, kernel log, errors, panel,
+// (KW.ui: state, boot stages, environment checks, kernel log, errors,
 // toast, data disk status, Reboot) on top of the store (store.ts) that the
 // React components (components/) render. Also the actions those components
 // run: Copy diagnostics, the data disk buttons, the key bar, paste, font size.
+// The system apps' windows (Settings, System) are sysapps.ts's.
 import { flushSync } from "react-dom";
 import { RESUME_AUTO, RESUME_BY_HAND, RESUME_FRESH, allowLeave, resumeAskedFor, resumeRequestKind, type ResumeRequest } from "./autosuspend.ts";
-import { DEFAULT_CMDLINE, DEFAULT_DISTRO, SETTING_NAMES, glDefault, saveSettings, type Config } from "./config.ts";
+import { DATA_SIZE_DEFAULT, DEFAULT_CMDLINE, DEFAULT_DISTRO, SETTING_NAMES, glDefault, saveSettings, type Config } from "./config.ts";
 import { KW, type KWError } from "./kw.ts";
-import { initStore, type Ask, type PadLayout, type CheckResult, type Options, type State, type Tab, type UiState } from "./store.ts";
+import { store } from "./prefs.ts";
+import { initStore, isRunning, isUp, phase, type Ask, type PadLayout, type CheckResult, type Options, type Phase, type State, type SuspendStep, type UiState } from "./store.ts";
+import { openSection, showSystem } from "./sysapps.ts";
+import { capitalize, fmtMiB, fmtT } from "./format.ts";
 
 export type { CheckResult, State } from "./store.ts";
 export type StageState = "pending" | "active" | "done" | "fail" | "skip";
-
-export const fmtT = (ms: number | null | undefined): string =>
-	ms == null ? "" : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
-export const fmtMiB = (n: number): string => `${(n / 1048576).toFixed(1)} MiB`;
-
-export function store(k: string, v?: string): string | null {
-	try {
-		if (v === undefined) return localStorage.getItem(`kw.${k}`);
-		localStorage.setItem(`kw.${k}`, v);
-	} catch {}
-	return null;
-}
 
 /**
  * sessionStorage: what this tab's next load does with the suspended
@@ -55,7 +47,7 @@ export function takeResumeRequest(): ResumeRequest {
 		return null;
 	}
 }
-/** The same without taking it (the splash, before boot.ts runs). */
+/** The same without taking it (the boot indicator, before boot.ts runs). */
 function peekResumeRequest(): ResumeRequest {
 	try { return resumeRequestKind(sessionStorage.getItem(RESUME_KEY)); } catch { return null; }
 }
@@ -103,32 +95,29 @@ function hintFor(msg: string): string {
 	}
 	if (/allocate|Memory\(\)|out of memory|array buffer/i.test(msg))
 		return "The browser refused the kernel's memory. Phones (especially 32-bit Chrome builds) have little contiguous address space; " +
-			"pick a smaller size under Options (e.g. 128 MiB) or add ?mem=128 to the URL. Alpine boots in 64 MiB.";
+			"pick a smaller size in Settings, Machine (e.g. 128 MiB) or add ?mem=128 to the URL. Alpine boots in 64 MiB.";
 	if (/\b(404|403|500)\b|Failed to fetch|NetworkError|network/i.test(msg))
 		return "The kernel could not be downloaded. Check the network and reload; a page from an older deploy may refer to a kernel that is gone.";
 	if (/module|script/i.test(msg))
 		return "A page script failed to load or parse: check the network and the server log. A browser too old for the syntax fails the same way; Chrome/Edge 137+ or Safari 27+ is required anyway.";
 	const smp = (KW.config?.cpus ?? 1) > 1;
 	if (/panic|trap|unreachable|RuntimeError/i.test(msg) || (smp && /\bCPU \d/.test(msg)))
-		return "The kernel stopped. The kernel log tab has the last console lines; Copy diagnostics and reboot." +
-			(smp ? " To rule out the SMP kernel, set CPUs to 1 under Options and reboot." : "");
+		return "The kernel stopped. System's Kernel log has the last console lines; Copy diagnostics and reboot." +
+			(smp ? " To rule out the SMP kernel, set CPUs to 1 in Settings, Machine and reboot." : "");
 	return "";
 }
 
 const LABEL: Record<State, string> = { checking: "Checking", loading: "Downloading", booting: "Booting", running: "Running", halted: "Halted", error: "Error" };
 
 /**
- * The tab title's first character: ▶ running, ‖ paused (held in the
- * background, boot.ts) or suspended, … starting, resuming or suspending,
- * ■ halted or powered off, ! failed. Plain text glyphs (▶ with U+FE0E, the
- * text presentation, so no browser draws it as a colour emoji).
+ * The tab title's first character, by the machine's phase (store.ts phase()):
+ * ▶ running, ‖ held (paused by hand or in the background, boot.ts) or
+ * suspended, … starting, resuming or suspending, ■ halted or powered off,
+ * ! failed. Plain text glyphs (▶ with U+FE0E, the text presentation, so no
+ * browser draws it as a colour emoji).
  */
-export function titleMark(state: State, label: string, suspended: boolean): string {
-	if (state === "error") return "!";
-	if (state === "halted") return suspended || label === "Suspended" ? "‖" : "■";
-	if (state === "running") return label === "Paused" ? "‖" : label === "Suspending" ? "…" : "▶︎";
-	return "…";
-}
+const TITLE_MARK: Record<Phase, string> = { starting: "…", running: "▶︎", suspending: "…", held: "‖", suspended: "‖", halted: "■", error: "!" };
+export const titleMark = (p: Phase): string => TITLE_MARK[p];
 
 interface Stage { id: string; label: string; s: StageState; t0: number | null; t1: number | null; detail: string }
 export interface LogLine { t: number; line: string; cls: string }
@@ -151,6 +140,7 @@ export function createUi(cfg: Config) {
 		sound: cfg.sound ? "on" : "off",
 		append: cfg.baseCmdline,
 		data: cfg.data ? "on" : "off",
+		datasize: String(cfg.dataSizeGiB),
 		root: cfg.root === "initramfs" ? "safe" : "overlay",
 		worker: cfg.workerParam ? "on" : "off",
 		cpus: String(cfg.smpParam),
@@ -158,18 +148,17 @@ export function createUi(cfg: Config) {
 		autosuspend: cfg.autosuspendParam,
 		askleave: cfg.askLeave ? "on" : "off",
 		gl: cfg.glParam ? "on" : "off",
+		vk: cfg.vkParam ? "on" : "off",
 	};
 	// Where the root's changes live on the data disk: per distro (guest/base/initramfs/init).
 	const upperDir = `/data/distros/${cfg.guest}/upper`;
 	const imageName = `${cfg.guest} image`;
 	const $ = initStore({
-		state: "checking", label: LABEL.checking, suspended: false, suspendedBytes: 0,
-		// A resume asked for (the Resume button, a suspend in the background) keeps the splash until the screen is restored (boot.ts).
-		splash: resumeAskedFor(peekResumeRequest()) && !cfg.verbose
-			? { title: "Resuming", msg: "Restoring the suspended session…", hidden: false, error: false, details: false }
-			: { title: "Starting", msg: "Loading the page scripts…", hidden: false, error: false, details: false },
+		state: "checking", label: LABEL.checking, suspend: null, suspended: false, suspendedBytes: 0,
+		// A resume asked for (the Resume button, a suspend in the background) says "Resuming" until the screen is restored (boot.ts).
+		boot: { label: "Starting", detail: "", progress: 0, resuming: resumeAskedFor(peekResumeRequest()) && !cfg.verbose, blank: true, done: false },
 		checks: [], errors: [], fatal: null,
-		panelOpen: false, tab: "status", toast: null,
+		toast: null,
 		dataStatus: "Not attached yet.", disk: null,
 		safeNote: cfg.root === "initramfs" && cfg.distro
 			? `Safe mode: the root is the plain ${imageName} (kw.root=initramfs, until you leave safe mode); /data is mounted as usual and your root changes stay in ${upperDir}. kw-overlay status explains, sudo kw-overlay discard starts over from the image.`
@@ -177,12 +166,12 @@ export function createUi(cfg: Config) {
 		distro: cfg.distro ? { name: cfg.distro.name, image: cfg.distro.imageId ?? "", url: cfg.distro.url } : null,
 		ctrl: false, keysOn: false, pasteOpen: false, ask: null, paused: false, prefix: false,
 		fontPref, fontSize: cfg.fontSize, copyText: null,
-		display: { attached: false, shown: true, width: 0, height: 0, keyboard: false, mouse: false, tablet: false,
+		display: { attached: false, width: 0, height: 0, keyboard: false, mouse: false, tablet: false,
 			rotate: store("fbRotate") === "1", layout: padLayout(store("padLayout")),
 			touchMode: store("touchMode") === "trackpad" ? "trackpad" : "mouse",
 			controls: store("padHidden") !== "1" },
-		desktop: { available: false, attached: false, shown: false, windows: [] },
-		win: 0, wins: [], preview: null, launcher: false,
+		wayland: { available: false, attached: false, windows: [] },
+		launcher: false,
 		options,
 	} satisfies UiState);
 
@@ -194,7 +183,7 @@ export function createUi(cfg: Config) {
 	let markPrefix = "";
 	const showMark = () => {
 		const s = $.get();
-		const prefix = `${titleMark(s.state, s.label, s.suspended)} `;
+		const prefix = `${titleMark(phase(s))} `;
 		if (prefix === markPrefix && document.title.startsWith(prefix)) return;
 		const cur = document.title;
 		const base = markPrefix && cur.startsWith(markPrefix) ? cur.slice(markPrefix.length) : cur;
@@ -213,29 +202,88 @@ export function createUi(cfg: Config) {
 	const stages: Record<string, Stage> = {};
 	for (const [id, label] of STAGES) stages[id] = { id, label, s: "pending", t0: null, t1: null, detail: "" };
 
+	// ---- the boot indicator's ring and step (components/BootIndicator.tsx) ---------
+	// Each stage has a share of the ring: an active one fills to its start (the
+	// download: by its bytes, where the size is known), a finished one to its end.
+	// The ring never goes back. The step shown is the last active stage's, or what
+	// ui.bootStep() said while none is; a resume says "Resuming" throughout.
+	const BOOT_SPAN: Record<string, [number, number]> = {
+		preflight: [0, 0.06], kernel: [0.08, 0.6], compile: [0.6, 0.7], memory: [0.7, 0.76], boot: [0.76, 0.9], userspace: [0.9, 1],
+	};
+	const BOOT_STEP: Record<string, string> = {
+		preflight: "Checking the browser", kernel: "Downloading the kernel", compile: "Compiling the kernel", memory: "Allocating memory",
+		boot: "Starting Linux", userspace: `Starting ${cfg.distro ? capitalize(cfg.guest) : "the base shell"}`,
+	};
+	let downloadPart = 0, downloadT = 0;
+	const setBoot = (patch: Partial<UiState["boot"]>) => $.set((s) => ({ boot: { ...s.boot, ...patch } }));
+	/** The ring and step from the stages; `detail`: the download's bytes. */
+	function bootProgress(detail = "") {
+		const b = $.get().boot;
+		if (b.done || $.get().fatal) return;
+		let p = 0, step = "";
+		for (const [id] of STAGES) {
+			const st = stages[id]!, [lo, hi] = BOOT_SPAN[id]!;
+			if (st.s === "done" || st.s === "skip") p = Math.max(p, hi);
+			else if (st.s === "active") {
+				p = Math.max(p, id === "kernel" ? lo + (hi - lo) * downloadPart : lo);
+				step = BOOT_STEP[id]!;
+			}
+		}
+		if (stages.kernel!.s !== "active") detail = "";
+		const patch: Partial<UiState["boot"]> = { progress: Math.max(b.progress, p), detail };
+		if (step) patch.label = step;
+		if (patch.progress !== b.progress || detail !== b.detail || (step && step !== b.label)) setBoot(patch);
+	}
+
 	// The kernel log is kept outside the store: it grows by a line at a time,
 	// and the Kernel log tab appends to its <pre> instead of re-rendering.
 	const logLines: LogLine[] = [];
 	const logListeners = new Set<(reset: boolean) => void>();
 	const LOG_MAX = 4000;
 	let fatalShown = false;
-	let opener: HTMLElement | null = null;
 	let toastId = 0, toastTimer: ReturnType<typeof setTimeout> | undefined;
-	let askId = 0, answer: ((ok: boolean) => void) | null = null;
+	/** The questions (ui.ask()): the first is shown, the others wait their turn. */
+	let askId = 0;
+	const asks: Array<{ q: Ask; resolve: (ok: boolean) => void }> = [];
 	let toastRun: (() => void) | null = null;
 
 	const ui = {
 		state: (): State => $.get().state,
-		setState(s: State, label?: string) {
+		/** The state, its label (default: the state's name) and Suspend's step (boot.ts; null: not suspending). */
+		setState(s: State, label?: string, suspend: SuspendStep | null = null) {
 			const cur = $.get().state;
 			if (cur === "error" || (cur === "halted" && s !== "error")) return; // terminal states stick
-			$.set({ state: s, label: label || LABEL[s] });
+			$.set({ state: s, label: label || LABEL[s], suspend });
+			// Stopped before user space printed (a halt, a kept session): the terminal says why.
+			if (s === "halted") ui.bootDone();
+			// boot.ts begins the download (its stage starts with the first bytes).
+			else if (s === "loading" && cur !== "loading") setBoot({ label: BOOT_STEP.kernel! });
 		},
-		splash(title: string, msg?: string, force?: boolean) {
-			if ($.get().state === "error" && !force) return;
-			$.set((s) => ({ splash: { ...s.splash, title, msg: msg || "" } }));
+
+		// ---- the boot indicator (components/BootIndicator.tsx) -----------------------
+		/** The indicator's step, until a stage replaces it ("Loading": the boot module). */
+		bootStep(label: string) {
+			if ($.get().state === "error") return;
+			setBoot({ label: label.replace(/…$/, ""), detail: "" });
 		},
-		hideSplash() { $.set((s) => ({ splash: { ...s.splash, hidden: true } })); },
+		/** boot.ts: a suspended session is being restored (the label says "Resuming"), or not after all. */
+		bootResume(on: boolean) { if ($.get().boot.resuming !== on) setBoot({ resuming: on }); },
+		/** boot.ts: the console shows something now (its first lines, or a quiet resume's held ones): its placeholder goes. */
+		consoleShown() { if ($.get().boot.blank) setBoot({ blank: false }); },
+		/** The kernel download's bytes (boot.ts; total 0: unknown): the label's detail, and the ring within the download's share. */
+		download(loaded: number, total: number) {
+			const t = performance.now();
+			if (t - downloadT < 80 && !(total > 0 && loaded >= total)) return; // a store update every chunk is too many
+			downloadT = t;
+			downloadPart = total > 0 ? Math.min(1, loaded / total) : 0;
+			const mib = (n: number) => (n / 1048576).toFixed(1);
+			bootProgress(total > 0 ? `${mib(loaded)} of ${mib(total)} MiB` : `${mib(loaded)} MiB`);
+		},
+		/**
+		 * The boot is over (user space printed, boot.ts markRunning(); or the kernel stopped): the indicator
+		 * fades out, the top bar shows the focused app again, the console's placeholder goes. It does not come back.
+		 */
+		bootDone() { if (!$.get().boot.done) setBoot({ done: true, blank: false }); },
 
 		stage(id: string, s: StageState, detail?: string) {
 			const st = stages[id];
@@ -244,6 +292,7 @@ export function createUi(cfg: Config) {
 			if ((s === "done" || s === "fail") && st.t1 == null) { st.t1 = now(); st.t0 ??= st.t1; }
 			st.s = s;
 			if (detail != null) st.detail = detail;
+			bootProgress();
 		},
 		/** State of a stage: pending, active, done, fail or skip. */
 		stageState: (id: string): StageState | null => stages[id]?.s ?? null,
@@ -252,6 +301,14 @@ export function createUi(cfg: Config) {
 			const st = stages[id];
 			return st && st.t0 != null && st.t1 != null ? st.t1 - st.t0 : null;
 		},
+		/**
+		 * The boot stages in their order, as System's Overview lists them and draws their timeline
+		 * (components/SystemInfo.tsx): t0 and t1 are ms since the page loaded (KW.t0), null until known.
+		 */
+		stages: () => STAGES.map(([id]) => {
+			const st = stages[id]!;
+			return { id, label: st.label, s: st.s, ms: st.t0 != null && st.t1 != null ? st.t1 - st.t0 : null, t0: st.t0, t1: st.t1, detail: st.detail };
+		}),
 
 		check(id: string, label: string, r: CheckResult, value: string, note?: string) {
 			$.set((s) => {
@@ -285,54 +342,22 @@ export function createUi(cfg: Config) {
 			return e;
 		},
 
-		openPanel(t?: Tab) {
-			if (!$.get().panelOpen) {
-				// Focus goes back here on close: a status line button the dialog was opened from.
-				const a = document.activeElement as HTMLElement | null;
-				opener = a?.closest?.("#bar") ? a : null;
-				a?.blur?.();
-			}
-			$.set((s) => ({ panelOpen: true, tab: t ?? s.tab }));
-			// Keys go to the dialog, not to the terminal under it (shortcuts.ts): focus its
-			// current tab, so arrows move between tabs and Tab goes on into the pane.
-			if (!cfg.coarse || opener) requestAnimationFrame(() => {
-				const p = document.getElementById("panel");
-				if (p && !p.contains(document.activeElement)) (p.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? p).focus({ preventScroll: true });
-			});
-		},
-		closePanel() {
-			if (!$.get().panelOpen) return;
-			$.set({ panelOpen: false });
-			const back = opener;
-			opener = null;
-			if (back?.isConnected) back.focus({ preventScroll: true });
-			else if (!cfg.coarse) KW.term?.focus();
-		},
-		/** The bar's shortcuts: open the panel on that tab, or close it if already there. */
-		togglePanel(t: Tab) {
-			const s = $.get();
-			if (s.panelOpen && s.tab === t) ui.closePanel();
-			else ui.openPanel(t);
-		},
-		selectTab(t: Tab) { $.set({ tab: t }); },
 		setPrefix(on: boolean) { if ($.get().prefix !== on) $.set({ prefix: on }); },
-		/** Reboot from a shortcut or the status line: one key away from a running session, so ask first. */
+		/** Reboot from a shortcut or the top bar's Control Center: one key away from a running session, so ask first. */
 		async confirmReboot() {
-			const state = $.get().state;
-			if ((state === "running" || state === "booting") &&
+			if (isUp($.get()) &&
 				!await ui.ask({ title: "reboot", msg: "The running system and its unsaved state are lost.", ok: "Reboot", danger: true })) return;
 			reboot();
 		},
 		/**
-		 * Suspend from a shortcut, the status line or the dialog, at once (boot.ts
+		 * Suspend from a shortcut, the top bar's Control Center or Settings, at once (boot.ts
 		 * does it: KW.suspend). Nothing to confirm: the machine stops only once its
 		 * session is stored, and Resume (or the next load) brings it back.
 		 */
 		suspend() {
 			const s = $.get();
-			if (!KW.suspend || s.state !== "running") { ui.toast("Suspend works once the system runs"); return; }
-			if (s.label === "Suspending") return; // pressed twice
-			ui.closePanel();
+			if (!KW.suspend || !isRunning(s)) { ui.toast("Suspend works once the system runs"); return; }
+			if (phase(s) === "suspending") return; // pressed twice
 			// The Resume card says the rest (the size included), so this toast goes once it is saved.
 			const id = ui.toast("Suspending…", { ms: SUSPEND_TOAST_MS });
 			KW.suspend().then(() => ui.toastHide(id),
@@ -352,22 +377,37 @@ export function createUi(cfg: Config) {
 		resumeAuto() { reloadToResume(true); },
 
 		/**
-		 * Ask in the confirm dialog (components/Overlays.tsx, a modal <dialog>)
-		 * instead of confirm(): true for OK. A newer question cancels an open one.
+		 * Ask in the confirm dialog (components/Overlays.tsx Confirm, an Alert on a
+		 * modal <dialog>: Dialog.tsx) instead of confirm(): true for OK. One at a
+		 * time: a question asked while another is open waits for it (first in,
+		 * first shown).
 		 */
 		ask(q: Omit<Ask, "id">): Promise<boolean> {
-			answer?.(false);
 			if (document.pointerLockElement) document.exitPointerLock(); // the pointer must reach the buttons
 			return new Promise((resolve) => {
-				answer = (ok) => { answer = null; $.set({ ask: null }); resolve(ok); };
-				$.set({ ask: { ...q, id: ++askId } });
+				asks.push({ q: { ...q, id: ++askId }, resolve });
+				if (asks.length === 1) $.set({ ask: asks[0]!.q });
 			});
 		},
-		/** The confirm dialog's answer. */
-		answer(ok: boolean) { answer?.(ok); },
+		/**
+		 * Answer a question: question `id`, else the one shown. Without an id,
+		 * false is also how the guest takes its question back (boot.ts, open.ts
+		 * dismiss): while a guest's question waits behind one of the page's, the
+		 * guest's goes, not the one shown.
+		 */
+		answer(ok: boolean, id?: number) {
+			let i = 0;
+			if (id !== undefined) i = asks.findIndex((a) => a.q.id === id);
+			else if (!ok && asks[0] && !asks[0].q.untrusted) i = Math.max(0, asks.findIndex((a) => a.q.untrusted));
+			const a = asks[i];
+			if (i < 0 || !a) return;
+			asks.splice(i, 1);
+			if (i === 0) $.set({ ask: asks[0]?.q ?? null });
+			a.resolve(ok);
+		},
 
 		/**
-		 * A short message at the bottom right, for `ms` (default 3.2 s). With
+		 * A short message under the top bar (components/Overlays.tsx Toast), for `ms` (default 3.2 s). With
 		 * `action`, one button that runs `run` and hides the toast (it does not
 		 * take the focus). Returns its id, for toastHide().
 		 */
@@ -396,7 +436,7 @@ export function createUi(cfg: Config) {
 
 		/** The Data disk section's status line (boot.ts). */
 		dataStatus(text: string) { $.set({ dataStatus: text }); },
-		/** The status line's disk segment (boot.ts, every 5 s). */
+		/** The data disk's usage, for the top bar's disk meter and System (boot.ts, every 5 s). */
 		diskUsage(used: number, size: number, saved: boolean) {
 			const d = $.get().disk;
 			if (d?.used !== used || d.size !== size || d.saved !== saved) $.set({ disk: { used, size, saved } });
@@ -447,10 +487,11 @@ export function createUi(cfg: Config) {
 			return d in map ? String.fromCharCode(map[d]!) : d;
 		},
 		setCtrl(on: boolean) { $.set({ ctrl: on }); },
-		/** A key bar button: arrows, Esc, Tab, ^C, Ctrl (latches), Paste, or a character. */
+		/** A key bar button: arrows, Esc, Tab, ^C, Ctrl (latches), the shortcut prefix (arms it, or disarms it: keys.ts), Paste, or a character. */
 		pressKey(k: string) {
 			const ctrl = $.get().ctrl;
 			if (k === "ctrl") { ui.setCtrl(!ctrl); return; }
+			if (k === "prefix") { ui.setCtrl(false); ui.setPrefix(!$.get().prefix); return; }
 			if (k === "paste") { ui.setCtrl(false); openPaste(); return; }
 			if (!KW.term) return;
 			const arrows: Record<string, string> = { up: "A", down: "B", right: "C", left: "D" };
@@ -490,10 +531,12 @@ export function createUi(cfg: Config) {
 		fatalShown = true;
 		const titles: Record<string, string> = { resource: "A page script failed to load", exception: "Script error", rejection: "Script error",
 			watchdog: "Startup stalled", preflight: "This browser cannot run the kernel" };
+		// The boot indicator turns red with the title while the boot is not over (components/BootIndicator.tsx);
+		// the top bar's status icon turns red either way.
 		$.set({ fatal: { title: e.title || titles[e.kind] || `Stopped: ${e.kind}`, msg: e.message, hint: e.hint || "" } });
-		if (!$.get().splash.hidden) $.set({ splash: { title: e.title || "Couldn't start", msg: e.message, hidden: false, error: true, details: true } });
 		KW.term?.notice(`[host] ${e.message}`);
-		ui.openPanel("errors");
+		// System's Errors as a window on the desktop (it works in any state): the title, message, hint and details.
+		openSection("errors");
 	}
 
 	// ---- diagnostics / copy / reboot ---------------------------------------
@@ -523,7 +566,8 @@ export function createUi(cfg: Config) {
 	function copyDiagnostics() {
 		const text = diagText();
 		const fallback = () => {
-			flushSync(() => $.set({ copyText: text })); // the textarea must exist to select it
+			// The textarea is in System's window: shown, so it can be selected (and seen).
+			flushSync(() => { showSystem(); $.set({ copyText: text }); });
 			const area = document.getElementById("copy-area") as HTMLTextAreaElement | null;
 			let ok = false;
 			if (area) {
@@ -557,6 +601,7 @@ export function createUi(cfg: Config) {
 		const append = o.append.trim();
 		set("append", append && append !== DEFAULT_CMDLINE ? append : null);
 		set("data", o.data === "off" ? "0" : null);
+		set("datasize", o.datasize === String(DATA_SIZE_DEFAULT) ? null : o.datasize);
 		set("root", o.root === "safe" ? "initramfs" : null);
 		// Worker thread and CPUs: saved only where they differ from this device's defaults (config.ts).
 		set("worker", (o.worker === "on") === cfg.workerDefault ? null : o.worker === "on" ? "1" : "0");
@@ -569,6 +614,8 @@ export function createUi(cfg: Config) {
 		set("askleave", o.askleave === "off" ? "0" : null);
 		// Guest GL: saved only where it differs from its default (on where the display is; config.ts glDefault()).
 		set("gl", (o.gl === "on") === glDefault(o.display !== "off") ? null : o.gl === "on" ? "1" : "0");
+		// Guest Vulkan: saved only when off (on by default).
+		set("vk", o.vk === "off" ? "0" : null);
 		return Object.fromEntries([...p].sort(([a], [b]) => a.localeCompare(b)));
 	}
 	/** The options differ from the settings this load booted with (the Reboot button says so). */
@@ -601,7 +648,7 @@ export function createUi(cfg: Config) {
 		};
 		// Let the guest write its file systems back to the saved disks first
 		// (boot.ts: KW.sync, at most 3 s).
-		if (KW.beforeReboot && $.get().state === "running") {
+		if (KW.beforeReboot && isRunning($.get())) {
 			ui.toast("Saving disks…");
 			KW.beforeReboot().then(go, go);
 		} else go();
@@ -636,8 +683,7 @@ export function createUi(cfg: Config) {
 	// Safe mode: one boot on the plain image root (kw.root=initramfs), with
 	// /data still mounted, to repair or turn off an overlay root (kw-overlay).
 	async function safeModeToggle() {
-		const state = $.get().state;
-		if (cfg.root !== "initramfs" && (state === "running" || state === "booting") &&
+		if (cfg.root !== "initramfs" && isUp($.get()) &&
 			!await ui.ask({ title: "safe mode", msg: `Reboot on the plain ${imageName} as the root: your root changes on /data are not used. /data stays mounted.`, ok: "Reboot" })) return;
 		ui.setOption("root", cfg.root === "initramfs" ? "overlay" : "safe");
 		reboot();

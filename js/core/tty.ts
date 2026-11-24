@@ -975,7 +975,7 @@ async function openSession(vsock: Vsock, payload: Uint8Array, opts: SpawnOptions
 	const timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
 	const signal = opts.signal;
 	const deadline = performance.now() + timeout;
-	const timedOut = () => new PtyError("ETIMEDOUT", `kwtty: no terminal server on vsock port ${port} within ${timeout} ms (is /usr/bin/kwtty running in the guest?)`);
+	const timedOut = () => new PtyError("ETIMEDOUT", `kwtty: no terminal server on vsock port ${port} within ${timeout} ms (is "kwbox tty serve" running in the guest?)`);
 	const conn = await connectRetry(vsock, port, deadline, timedOut, signal);
 	try {
 		const reader = conn.readable.getReader();

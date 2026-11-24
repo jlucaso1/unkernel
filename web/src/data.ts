@@ -58,9 +58,6 @@ export function loadTemplate(bundled: Uint8Array | undefined): { bytes: Uint8Arr
 	return bundled ? { bytes: bundled, from: "bundled in the kernel" } : { bytes: null, from: "the kernel has no unkernel.datadisk section" };
 }
 
-export const fmtSize = (n: number): string =>
-	n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GiB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MiB` : `${Math.round(n / 1024)} KiB`;
-
 export interface StorageState {
 	persisted?: boolean;
 	usage?: number;
@@ -96,10 +93,11 @@ export interface DataAttach {
 	from?: string;
 }
 
-/** Open the data disk for this page. */
-export async function attachDataDisk({ enabled, bundled, log, onError }: {
+/** Open the data disk for this page; `size` (bytes) grows a smaller saved disk (openDataDisk()). */
+export async function attachDataDisk({ enabled, bundled, size, log, onError }: {
 	enabled: boolean;
 	bundled: Uint8Array | undefined;
+	size?: number;
 	log: (m: string) => void;
 	onError: (e: unknown) => void;
 }): Promise<DataAttach> {
@@ -109,18 +107,18 @@ export async function attachDataDisk({ enabled, bundled, log, onError }: {
 	if (!tpl.bytes) return { disk: null, lock: null, reason: `no template (${tpl.from})` };
 	const lock = await acquireDiskLock();
 	if (!lock.held) {
-		const disk = await openDataDisk({ template: tpl.bytes, mode: "snapshot", log });
+		const disk = await openDataDisk({ template: tpl.bytes, mode: "snapshot", size, log });
 		return { disk, lock, from: tpl.from, notice: `open in another tab: this tab's /data is ${disk.notice} (changes are not saved)` };
 	}
 	try {
-		const disk = await openDataDisk({ template: tpl.bytes, log, onError });
+		const disk = await openDataDisk({ template: tpl.bytes, size, log, onError });
 		return { disk, lock, from: tpl.from };
 	} catch (e) {
 		// A saved disk of another format, or IndexedDB refusing (private
 		// browsing, disabled storage): run on a copy of the template.
 		const err = e as Error;
 		log(`[host] data disk: not attached persistently: ${err.name}: ${err.message}`);
-		const disk = await openDataDisk({ template: tpl.bytes, mode: "snapshot", log, snapshotLimit: 0 });
+		const disk = await openDataDisk({ template: tpl.bytes, mode: "snapshot", size, log, snapshotLimit: 0 });
 		const why = err.name === "DataDiskFormatError" ? err.message : `IndexedDB failed (${err.name}: ${err.message})`;
 		return { disk, lock, from: tpl.from, notice: `${why}; this tab's /data is a fresh disk in memory (changes are not saved)` };
 	}

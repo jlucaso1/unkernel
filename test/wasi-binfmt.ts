@@ -3,7 +3,7 @@
 // Prototype check of WASI programs run by the guest on the host's wasm
 // engine (guest/src/kwwasi.c, js/core/wasi-exec.ts), on Alpine. Builds
 // kwwasi and the test programs in test/wasi/ with zig (aarch64-linux-musl
-// and wasm32-wasi), mounts them in the guest, copies kwwasi to /usr/bin,
+// and wasm32-wasi), mounts them in the guest, copies kwwasi to /usr/lib/kw,
 // registers it with the guest's binfmt_misc (the kw layer does that at
 // boot), and runs the programs by path.
 //
@@ -96,15 +96,15 @@ async function check(name: string, cmd: string, want: { stdout?: string | RegExp
 
 try {
 	const setup = await sh(`set -e
-		install -m 755 /mnt/kw/kwwasi /usr/bin/kwwasi
+		install -m 755 /mnt/kw/kwwasi /usr/lib/kw/kwwasi
 		d=/proc/sys/fs/binfmt_misc
-		[ -e $d/wasi ] || printf '%s\\n' ':wasi:M::\\x00asm\\x01\\x00\\x00\\x00::/usr/bin/kwwasi:P' > $d/register || :
+		[ -e $d/wasi ] || printf '%s\\n' ':wasi:M::\\x00asm\\x01\\x00\\x00\\x00::/usr/lib/kw/kwwasi:P' > $d/register || :
 		mkdir -p /root/work/sub /tmp/w /root/bin
 		cp /mnt/kw/*.wasm /mnt/kw/loop.a64 /root/work/ && chmod 755 /root/work/*.wasm /root/work/loop.a64
 		cp /root/work/hello.wasm /root/bin/ && ln -s /root/work/hello.wasm /root/bin/hello-link
 		echo "file in work dir" > /root/work/sub/data.txt
 		cat /proc/sys/fs/binfmt_misc/wasi`);
-	assert.match(setup.stdout, /interpreter \/usr\/bin\/kwwasi/, setup.stderr);
+	assert.match(setup.stdout, /interpreter \/usr\/lib\/kw\/kwwasi/, setup.stderr);
 
 	await check("argv, env, exit status", "cd /root/work && KW_GREETING=hola ./hello.wasm one 'two words'",
 		{ stdout: "argv[0]=./hello.wasm\nargv[1]=one\nargv[2]=two words\nKW_GREETING=hola\ngetcwd=/\n", code: 43 });

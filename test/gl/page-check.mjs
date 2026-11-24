@@ -20,15 +20,17 @@
 //      the shell has GALLIUM_DRIVER=virpipe; /tmp/.virgl_test exists either way
 //   R  with the device, unless --no-resize: a display size change reaches the
 //      guest's DRM mode. test/gpu/kms-hotplug.c (built here, written into
-//      the guest) holds the display at the stage's size, the size the page
-//      offers; then the page is resized (DevTools Emulation, the window's
-//      size) five times 60 ms apart: the guest gets one hotplug (the page
-//      waits for the stage to settle), whose preferred mode is the new
-//      stage size, which the client sets; the page's canvas then has that
-//      size and the display layer (#fb-layer) and the Wayland desktop's
-//      layer (#wl-layer) cover the stage; a second resize, a second
-//      hotplug and mode; and (unless --eager) the renderer is still not
-//      loaded: a dumb-buffer KMS client needs none
+//      the guest) holds the display at the size the page offers: the
+//      Display window's content box (#fb-layer, display.ts size()). The
+//      window maximized (KW.wm), so that it follows the page: one hotplug
+//      whose preferred mode is the new box, which the client sets; then the
+//      page is resized (DevTools Emulation, the window's size) five times
+//      60 ms apart: the guest gets one more hotplug (the page waits for the
+//      box to settle), with the new box, which the client sets; the page's
+//      canvas then has that size, #fb-layer is that box and wland's
+//      container (#wl-desktop) covers the workspace (#workspace); a third
+//      size, a third hotplug and mode; and (unless --eager) the renderer is
+//      still not loaded: a dumb-buffer KMS client needs none
 //   3  unless --no-apt: apt-get installs Mesa over the page's network (the
 //      default Wisp server, deb.debian.org through the page's CORS mirror:
 //      needs the internet), then in a login shell `eglinfo -B -p gbm` (the
@@ -157,7 +159,7 @@ try {
 	await send("Runtime.enable");
 	await send("Network.enable");
 	// Guest GL by default: no ?gl=1.
-	const url = `${base}/?distro=debian&data=0${cpus !== "0" ? `&cpus=${cpus}` : ""}&mem=1024&autosuspend=0&askleave=0${inline ? "&worker=0" : ""}${gpu ? "" : "&gpu=0"}${eager ? "&glload=eager" : ""}`;
+	const url = `${base}/?distro=debian&data=0${cpus !== "0" ? `&cpus=${cpus}` : ""}&mem=1024&autosuspend=0&askleave=0&autohide=0${inline ? "&worker=0" : ""}${gpu ? "" : "&gpu=0"}${eager ? "&glload=eager" : ""}`;
 	say(`open ${url}`);
 	await send("Page.navigate", { url });
 	for (let i = 0; i < 600 && !(await evaluate("typeof globalThis.KW?.ready === 'function' && !!globalThis.KW.config").catch(() => false)); i++) await sleep(200);
@@ -332,7 +334,11 @@ await cleanup();
 console.log(fails ? `${fails} check(s) failed` : "all checks passed");
 process.exit(fails ? 1 : 0);
 
-/** R: page resizes reach the guest's DRM mode (one hotplug per burst), and the page's layers follow. */
+/**
+ * R: the size offered (the Display window's content box, #fb-layer) reaches the guest's DRM
+ * mode, one hotplug per burst of changes; the window maximized follows the page, and the
+ * page's layers follow the mode.
+ */
 async function resizeCheck(evaluate, send) {
 	const bin = join(profile, "kms-hotplug");
 	const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -341,53 +347,70 @@ async function resizeCheck(evaluate, send) {
 	const b64 = readFileSync(bin).toString("base64");
 	await evaluate(`KW.vm.exec("sh", ["-c", "base64 -d >/tmp/kms-hotplug && chmod 755 /tmp/kms-hotplug"], { input: ${JSON.stringify(b64)}, timeout: 60000 }).then(() => 1)`);
 	const metrics = (w, h) => send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false });
-	// The size the page offers: the stage's (display.ts size(); not rotated on a desktop).
-	const stage = () => evaluate(`(() => { const s = document.getElementById("stage"); return s.clientWidth + "x" + s.clientHeight; })()`);
+	// The size the page offers: the Display window's content box (display.ts size(); not rotated on a desktop). Null until the window opens.
+	const box = () => evaluate(`(() => { const e = document.getElementById("fb-layer"); return e?.isConnected && e.clientWidth ? e.clientWidth + "x" + e.clientHeight : null; })()`);
 	const log = () => evaluate(`KW.vm.exec("cat", ["/tmp/kh.log"]).then((r) => r.stdout)`);
-	const until = async (re, ms = 60000) => {
+	/** Poll the client's log until `done` says it has what is waited for (or the time is up); returns it. */
+	const until = async (done, ms = 60000) => {
 		const end = Date.now() + ms;
 		let text = "";
 		while (Date.now() < end) {
 			text = await log();
-			if (re.test(text)) break;
+			if (/FAILED/.test(text) || done(text)) break;
 			await sleep(300);
 		}
 		return text;
 	};
+	/** The modes the client set, in order (one per hotplug: its STEPS are all "s"). */
+	const sets = (text) => [...text.matchAll(/set (\d+x\d+)/g)].map((m) => m[1]);
+	const hotplug = (text, n) => new RegExp(`hotplug ${n}: preferred (\\d+x\\d+)`).exec(text)?.[1];
 	const layers = () => evaluate(`JSON.stringify((() => {
 		const q = (id) => document.getElementById(id), box = (e) => e ? e.offsetWidth + "x" + e.offsetHeight : null;
 		const c = q("fb");
-		return { stage: q("stage").clientWidth + "x" + q("stage").clientHeight, canvas: c ? c.width + "x" + c.height : null, canvasCss: box(c), fbLayer: box(q("fb-layer")), wlLayer: box(q("wl-layer")) };
+		return { canvas: c ? c.width + "x" + c.height : null, canvasCss: box(c), fbLayer: box(q("fb-layer")), workspace: box(q("workspace")), wlDesktop: box(q("wl-desktop")) };
 	})())`).then(JSON.parse);
 	await metrics(1000, 700);
 	await sleep(1500);
-	const s0 = await stage();
-	await evaluate(`(globalThis.__kh = KW.vm.exec("sh", ["-c", "/tmp/kms-hotplug /dev/dri/card0 120 ss 3 >/tmp/kh.log 2>&1"], { user: "root", timeout: 200000 }), 1)`);
-	let text = await until(/ready|FAILED/);
+	// Three hotplugs: the window maximized, a burst of page sizes, one more page size.
+	await evaluate(`(globalThis.__kh = KW.vm.exec("sh", ["-c", "/tmp/kms-hotplug /dev/dri/card0 120 sss 3 >/tmp/kh.log 2>&1"], { user: "root", timeout: 200000 }), 1)`);
+	let text = await until((t) => /ready/.test(t));
 	const r0 = /ready (\d+x\d+)/.exec(text)?.[1];
-	report("resize: the guest's mode is the stage's size", r0 === s0, `kms-hotplug ready ${r0}, stage ${s0}`);
+	// The Display window opens once the client has set its mode (display.ts onDisplay()).
+	let b0 = null;
+	for (let i = 0; i < 50 && !(b0 = await box()); i++) await sleep(100);
+	report("resize: the guest's mode is the size offered, the Display window's content box", !!r0 && r0 === b0, `kms-hotplug ready ${r0}, #fb-layer ${b0}`);
+	// Maximized, the window's box is the workspace's (less its title bar) and follows the page. The page's
+	// first Display window opens at the default box, not maximized (display.ts openGeom()).
+	const wasMax = await evaluate(`!!KW.wm.get("display")?.maximized`);
+	await evaluate(`(KW.wm.maximize("display", true), 1)`);
+	text = await until((t) => sets(t).length >= 1);
+	await sleep(500);
+	const bm = await box(), hotM = hotplug(text, 1), setM = sets(text)[0];
+	report("resize: the Display window maximized, its new box reaches the guest (a hotplug, the mode set)", !wasMax && hotM === bm && setM === bm,
+		`maximized before ${wasMax}; hotplug 1 preferred ${hotM}, set ${setM}, #fb-layer ${bm}`);
 	// A burst: five sizes 60 ms apart, one hotplug when it settles.
 	for (const [w, h] of [[960, 680], [940, 660], [920, 650], [910, 645], [900, 640]]) {
 		await metrics(w, h);
 		await sleep(60);
 	}
-	text = await until(/set \d+x\d+|FAILED/);
+	text = await until((t) => sets(t).length >= 2);
 	await sleep(1500);
 	text = await log();
-	const s1 = await stage();
-	const set1 = /set (\d+x\d+)/.exec(text)?.[1], hot1 = /hotplug 1: preferred (\d+x\d+)/.exec(text)?.[1];
+	const b1 = await box();
+	const set1 = sets(text)[1], hot1 = hotplug(text, 2);
 	const uevents = (text.match(/uevent /g) ?? []).length;
 	const l1 = await layers();
-	report("resize: one hotplug for a burst of resizes, the new stage size", uevents === 1 && hot1 === s1 && set1 === s1,
-		`${uevents} uevent(s); hotplug 1 preferred ${hot1}, set ${set1}, stage ${s1}`);
-	report("resize: the canvas has the guest's new mode, the layers cover the stage", l1.canvas === s1 && l1.fbLayer === s1 && l1.wlLayer === s1 && l1.canvasCss === s1, JSON.stringify(l1));
-	// A second size: a second hotplug and mode.
+	report("resize: one hotplug for a burst of page resizes, the window's new box", uevents === 2 && hot1 === b1 && set1 === b1,
+		`${uevents} uevent(s), one of them the maximize's; hotplug 2 preferred ${hot1}, set ${set1}, #fb-layer ${b1}`);
+	report("resize: the canvas has the guest's new mode, filling the Display window's box; wland's container covers the workspace",
+		l1.canvas === b1 && l1.fbLayer === b1 && l1.canvasCss === b1 && !!l1.workspace && l1.wlDesktop === l1.workspace, JSON.stringify(l1));
+	// Another size: another hotplug and mode.
 	await metrics(1100, 760);
-	text = await until(/done|FAILED/);
-	const s2 = await stage();
-	const hot2 = /hotplug 2: preferred (\d+x\d+)/.exec(text)?.[1], set2 = [...text.matchAll(/set (\d+x\d+)/g)].pop()?.[1];
+	text = await until((t) => /done/.test(t));
+	const b2 = await box();
+	const hot2 = hotplug(text, 3), set2 = sets(text)[2];
 	const code = await evaluate("globalThis.__kh.then((r) => r.exitCode)");
-	report("resize: a second resize, a second hotplug and mode", hot2 === s2 && set2 === s2 && code === 0, `hotplug 2 preferred ${hot2}, set ${set2}, stage ${s2}, exit ${code}`);
+	report("resize: another page size, another hotplug and mode", hot2 === b2 && set2 === b2 && code === 0, `hotplug 3 preferred ${hot2}, set ${set2}, #fb-layer ${b2}, exit ${code}`);
 	console.log(`--- kms-hotplug:\n${text.trim()}`);
 	await send("Emulation.clearDeviceMetricsOverride");
 	await sleep(1000);

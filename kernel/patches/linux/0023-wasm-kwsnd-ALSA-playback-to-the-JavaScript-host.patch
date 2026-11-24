@@ -1,4 +1,4 @@
-From 755aeb7b60636b449fca9bc3058aa20dc87e8240 Mon Sep 17 00:00:00 2001
+From b1bf6cc5d082b1505e1cea0252768ef4ac606418 Mon Sep 17 00:00:00 2001
 From: Pooya Parsa <pooya@pi0.io>
 Date: Sun, 15 Nov 2026 10:16:10 +0000
 Subject: [PATCH] wasm: kwsnd, ALSA playback to the JavaScript host
@@ -42,8 +42,8 @@ OSS PCM emulation (/dev/dsp, which static SDL 1.2 builds use) is 29 KiB
 ---
  sound/drivers/Kconfig  |   9 ++
  sound/drivers/Makefile |   2 +
- sound/drivers/kwsnd.c  | 307 +++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 318 insertions(+)
+ sound/drivers/kwsnd.c  | 340 +++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 351 insertions(+)
  create mode 100644 sound/drivers/kwsnd.c
 
 diff --git a/sound/drivers/Kconfig b/sound/drivers/Kconfig
@@ -88,10 +88,10 @@ index a08bdd70ec9..a5abb0cf1ad 100644
  obj-$(CONFIG_SND_PCMTEST) += snd-pcmtest.o
 diff --git a/sound/drivers/kwsnd.c b/sound/drivers/kwsnd.c
 new file mode 100644
-index 00000000000..2d9f808a5eb
+index 00000000000..8f4e9138ec8
 --- /dev/null
 +++ b/sound/drivers/kwsnd.c
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,340 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * kwsnd: ALSA playback to the JavaScript host (unkernel).
@@ -125,6 +125,16 @@ index 00000000000..2d9f808a5eb
 + * time: the queued frames then play on at the normal pace instead of
 + * being rushed out, the program sees no underrun from the stall alone, and
 + * the pointer never moves by a whole buffer, which the core cannot see.
++ *
++ * A tick reports to the core (snd_pcm_period_elapsed()) only when the
++ * pointer crossed a period boundary or reached appl_ptr (the end of a
++ * drain, an underrun). The core takes each report for a whole period, and
++ * one that falls short of the next boundary more than half a buffer after
++ * the pointer last moved (the first tick after a stall, when a period is
++ * longer than three ticks) for a missed buffer: it would add a buffer to
++ * the pointer and stop the stream. Between reports the core reads the
++ * pointer only when the program calls it, so a tick works from its own
++ * position, not the core's hw_ptr.
 + *
 + * The host is told about every state change with wasm_driver_sound_event():
 + * open, prepare (rate, channels, format), start, stop (drain or not) and
@@ -187,10 +197,10 @@ index 00000000000..2d9f808a5eb
 +	.periods_max = 1024,
 +};
 +
-+/* Hand @frames frames from the hardware position on to the host. */
-+static void kwsnd_push(struct snd_pcm_runtime *runtime, snd_pcm_uframes_t frames)
++/* Hand @frames frames from ring position @pos on to the host. */
++static void kwsnd_push(struct snd_pcm_runtime *runtime, snd_pcm_uframes_t pos,
++		       snd_pcm_uframes_t frames)
 +{
-+	snd_pcm_uframes_t pos = runtime->status->hw_ptr % runtime->buffer_size;
 +	long queued = -1;
 +
 +	while (frames) {
@@ -232,16 +242,39 @@ index 00000000000..2d9f808a5eb
 +						    NSEC_PER_SEC, runtime->rate));
 +	}
 +	if (want) {
-+		snd_pcm_sframes_t queued = snd_pcm_playback_hw_avail(runtime);
++		u64 pos = s->pos0 + s->played;	/* period-aligned like hw_ptr */
++		u32 ring, ahead;
++		snd_pcm_sframes_t queued;
 +		u64 send = want;
++		bool report;
 +
++		/*
++		 * The core's hw_ptr is where the pointer was at the last report
++		 * or call from the program, less than a period ago: the frames
++		 * the program has queued start @ahead frames after it.
++		 */
++		div_u64_rem(pos, runtime->buffer_size, &ring);
++		ahead = (ring + runtime->buffer_size -
++			 runtime->status->hw_ptr % runtime->buffer_size) %
++			runtime->buffer_size;
++		queued = snd_pcm_playback_hw_avail(runtime) - ahead;
 +		/* Without silence filling, frames past appl_ptr are stale. */
 +		if (!runtime->silence_size && send > (u64)max_t(snd_pcm_sframes_t, queued, 0))
 +			send = max_t(snd_pcm_sframes_t, queued, 0);
-+		kwsnd_push(runtime, send);
++		kwsnd_push(runtime, ring, send);
 +		s->played += want;
++		/*
++		 * A period ended, or the pointer reached appl_ptr: the end of a
++		 * drain, or an underrun, which the core must see now, before a
++		 * write in progress (it copies without the lock) moves appl_ptr
++		 * past frames the pointer has gone by without sending them.
++		 */
++		report = div_u64(pos, runtime->period_size) !=
++			 div_u64(pos + want, runtime->period_size) ||
++			 (snd_pcm_sframes_t)want >= queued;
 +		/* May stop the stream (underrun, drain done): see kwsnd_trigger. */
-+		snd_pcm_period_elapsed_under_stream_lock(s->substream);
++		if (report)
++			snd_pcm_period_elapsed_under_stream_lock(s->substream);
 +	}
 +	if (!s->running)
 +		goto stopped;

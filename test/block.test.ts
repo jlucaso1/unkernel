@@ -695,12 +695,17 @@ test("readDistroHeader: a 136-byte header adds background; the 128-byte one has 
 	assert.equal(readDistroHeader(head(136, 72 * MiB, 3 * MiB, 20 * MiB).subarray(0, 128))?.background, 0);
 });
 
-test("HttpBase background: once the boot is quiet, [prefetch, background) comes in sequential pieces; reads in it need no request", async () => {
+test("HttpBase background: once the image was read and the boot is quiet, [prefetch, background) comes in sequential pieces; reads in it need no request", async () => {
 	const MiB = 1024 * KiB;
 	const s = await rangeServer(8 * MiB);
 	try {
 		const b = await HttpBase.open(s.url, { prefetch: MiB, background: 6 * MiB, maxRequest: 2 * MiB, readAhead: false });
 		assert.equal(b.stats.background, 6 * MiB);
+		// Not before the first read (an image opened while its kernel loads), however long that takes.
+		await new Promise((r) => setTimeout(r, 1600));
+		assert.equal(b.stats.backgroundState as string, "waiting");
+		assert.deepEqual(s.ranges, [[0, CS], [CS, MiB]]);
+		await b.read(4096, 4096);
 		const t0 = Date.now();
 		while (b.stats.backgroundState !== "done") {
 			assert.ok(!["failed", "skipped"].includes(b.stats.backgroundState), b.stats.backgroundState);

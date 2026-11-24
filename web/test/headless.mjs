@@ -14,23 +14,33 @@
 //   desktop   1440x900 on http://127.0.0.1 (a secure context): boot to the
 //             shell prompt, run a command, check that kwemu's JIT tier
 //             compiled hot code (KW.jitStats()), check cross-origin
-//             isolation (the COOP/COEP route rule), open the status panel.
+//             isolation (the COOP/COEP route rule), open System's window (the
+//             top bar's Control Center, #tb-status, then its System…,
+//             #tb-cc-system): the boot stages, every option's control in
+//             Settings, the kernel log.
 //   mobile    360x740 phone emulation (touch, Android UA, DPR 3) loaded from
 //             the machine's LAN IP over plain http (NOT a secure context, like
 //             a phone on the LAN): boot, type through the terminal's textarea
 //             and the touch key bar (incl. sticky Ctrl), shrink the viewport
-//             as the on-screen keyboard would, open the panel.
-//   nojspi    ?simulate=nojspi: the indicator turns red and the panel opens
-//             with the JSPI error; the boot module is never loaded.
-//   fetch404  the kernel download answers 404 (request interception): red
-//             indicator, panel shows the 404.
+//             as the on-screen keyboard would, open System's window and Copy
+//             diagnostics there.
+//   nojspi    ?simulate=nojspi: the status icon turns red and System's
+//             window opens on Errors with the JSPI error; the boot module is
+//             never loaded.
+//   fetch404  the kernel download answers 404 (request interception):
+//             System's window opens on Errors with the 404.
 //   modfail   the network drops the boot module (boot-*.js, or src/boot.ts
-//             with --dev): main.tsx reports it in the panel.
+//             with --dev): main.tsx reports it in System's Errors.
 //   lowmem    ?simulate=lowmem&mem=512: allocations above 128 MiB fail, the
 //             SDK falls back to 128 MiB and the default image still boots to the shell
 //             and runs a command. (kwtest is not in release bundles, which
 //             the built page runs.)
-// Layout checks (nothing overflows or overlaps) run at both viewports.
+// Layout checks (nothing overflows or overlaps) run at both viewports. The
+// page is the desktop (components/App.tsx): #desktop with the windows, the
+// key bar (#keys) and the Dock (#dock) below it, the top bar (#topbar) over
+// its top; Settings and System are windows (sysapps.ts: #settings, #system,
+// with class open while shown), and the console is terminal 0 (#term) in its
+// Terminal window.
 // Screenshots go to --shots (default: $TMPDIR/unkernel-shots).
 import { mkdirSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -59,20 +69,23 @@ const MOBILE_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (
 const PHONE = { width: 360, height: 740, deviceScaleFactor: 3, mobile: true };
 const DESKTOP = { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false };
 
-// Layout invariants: no horizontal overflow, bar/terminal/keys inside the
-// viewport and not overlapping, terminal grid fits its box, pill not clipped.
+// Layout invariants: no horizontal overflow; the desktop, the key bar, the
+// Dock (and its pill), the top bar (unless the on-screen keyboard hides it)
+// and its status icon inside the viewport; the desktop, the key bar
+// and the Dock not overlapping one another (the top bar lies over the
+// desktop by design), nor the top bar's two sides; the console's terminal
+// grid fits its box.
 const LAYOUT = `(() => {
 	const vw = innerWidth, vh = innerHeight, bad = [];
 	const R = (s) => { const e = document.querySelector(s); if (!e || e.offsetParent === null && getComputedStyle(e).position !== 'fixed') return null; return e.getBoundingClientRect(); };
 	const inside = (n, r) => { if (r && (r.left < -0.5 || r.top < -0.5 || r.right > vw + 0.5 || r.bottom > vh + 0.5)) bad.push(n + ' outside viewport ' + JSON.stringify([r.left, r.top, r.right, r.bottom])); };
 	const over = (a, b, ra, rb) => { if (ra && rb && ra.left < rb.right - 0.5 && rb.left < ra.right - 0.5 && ra.top < rb.bottom - 0.5 && rb.top < ra.bottom - 0.5) bad.push(a + ' overlaps ' + b); };
 	if (document.documentElement.scrollWidth > vw + 0.5) bad.push('page scrolls horizontally: ' + document.documentElement.scrollWidth);
-	const bar = R('#bar'), stage = R('#stage'), keys = R('#keys'), pill = R('#status'), brand = R('#bar-launcher');
-	inside('bar', bar); inside('stage', stage); inside('keys', keys); inside('pill', pill);
-	over('bar', 'stage', bar, stage); over('stage', 'keys', stage, keys);
-	over('pill', 'brand', pill, brand);
-	const lbl = document.getElementById('status-label');
-	if (lbl.scrollWidth > lbl.clientWidth + 1) bad.push('status label truncated: ' + lbl.textContent);
+	const dock = R('#dock'), pill = R('#dock .dock-pill'), desk = R('#desktop'), keys = R('#keys');
+	const top = R('#topbar'), status = R('#tb-status');
+	inside('dock', dock); inside('dock pill', pill); inside('desktop', desk); inside('keys', keys); inside('top bar', top); inside('status icon', status);
+	over('dock', 'desktop', dock, desk); over('desktop', 'keys', desk, keys); over('keys', 'dock', keys, dock);
+	over('top bar menus', 'top bar status', R('#topbar .tb-left'), R('#topbar .tb-right'));
 	const t = globalThis.term, tEl = document.getElementById('term'), term = R('#term'), grid = R('#term .term-grid');
 	if (grid && term && grid.right > term.right + 0.5) bad.push('terminal grid clipped: ' + JSON.stringify([grid.right, term.right]));
 	const rowH = parseFloat(getComputedStyle(tEl).getPropertyValue('--term-row-height'));
@@ -93,10 +106,12 @@ const TOP_ROW = `(() => {
 	const r = [...t.querySelectorAll('.term-grid .term-row')].find((e) => e.getBoundingClientRect().top >= top - 1);
 	return r ? r.textContent.replace(/\\u00a0/g, ' ').trimEnd() : '';
 })()`;
-// Keyboard focus is in the terminal's textarea (so the on-screen keyboard is up).
+// Keyboard focus is in the console's textarea (so the on-screen keyboard is up).
 const TERM_FOCUSED = "document.activeElement?.tagName === 'TEXTAREA' && document.getElementById('term').contains(document.activeElement)";
 // The prompt is "~ ⇒ " on every distro (guest/distro/*/rootfs/etc/profile.d/kw-prompt.sh).
 const PROMPT = "/⇒\\s*$/m";
+// System's window is shown (sysapps.ts: its element #system has class open while it is).
+const SYSTEM_OPEN = "document.getElementById('system')?.classList.contains('open')";
 
 // --- scenarios -----------------------------------------------------------------
 const envs = {};
@@ -167,11 +182,13 @@ const scenarios = {
 		if (!envs.desktop.isolated || envs.desktop.sab !== "function") throw new Error(`not cross-origin isolated: ${JSON.stringify(envs.desktop)}`);
 		await checkLayout(page, "desktop");
 		await page.shot("desktop.png");
-		await page.click("#status");
-		await page.waitFor("document.getElementById('panel').classList.contains('open')", "panel open");
+		await page.click("#tb-status");
+		await page.waitFor("!!document.getElementById('tb-cc-system')", "the Control Center open");
+		await page.click("#tb-cc-system");
+		await page.waitFor(SYSTEM_OPEN, "System's window open");
 		const tl = await page.evaluate("['preflight', 'kernel', 'compile', 'memory', 'boot', 'userspace'].map(id => id + ' ' + KW.ui.stageState(id))");
 		if (tl.some((l) => !/ (done|skip)$/.test(l))) throw new Error(`boot stages incomplete: ${tl.join(", ")}`);
-		await page.shot("desktop-panel.png");
+		await page.shot("desktop-system.png");
 		// Every option has a control, and the settings Reboot saves follow them (defaults save nothing).
 		// Check boxes and radios are set as a script would; the page renders on the next task.
 		const opts = await page.evaluate(`(async () => {
@@ -220,10 +237,10 @@ const scenarios = {
 			|| opts.autoDefault !== "opt-autosuspend-0" || q.get("autosuspend") !== "30" || q.get("askleave") !== "0" || q.get("gl") !== "1")
 			throw new Error(`options do not map to the settings: ${JSON.stringify(opts)}`);
 		console.log(`  options -> ${q}`);
-		await page.click('.tabs [data-tab="log"]');
+		await page.click('#system [data-tab="log"]');
 		const log = await page.evaluate("document.getElementById('log').textContent");
 		if (!/Run \/init as init process/.test(log)) throw new Error("kernel log tab lacks the dmesg lines");
-		await page.shot("desktop-panel-log.png");
+		await page.shot("desktop-system-log.png");
 	},
 
 	async mobile(page) {
@@ -313,11 +330,13 @@ const scenarios = {
 		await page.emulate(PHONE, { touch: true });
 		await sleep(300);
 
-		await page.tap("#status");
-		await page.waitFor("document.getElementById('panel').classList.contains('open')", "panel open");
-		await page.shot("mobile-panel.png");
-		await page.tap('.tabs [data-tab="log"]');
-		await page.shot("mobile-panel-log.png");
+		await page.tap("#tb-status");
+		await page.waitFor("!!document.getElementById('tb-cc-system')", "the Control Center open");
+		await page.tap("#tb-cc-system");
+		await page.waitFor(SYSTEM_OPEN, "System's window open");
+		await page.shot("mobile-system.png");
+		await page.tap('#system [data-tab="log"]');
+		await page.shot("mobile-system-log.png");
 		// Copy diagnostics without the Clipboard API (insecure origin): textarea fallback.
 		await page.tap("#copy");
 		const fallback = await page.evaluate("!document.getElementById('copy-area').hidden && document.getElementById('copy-area').value.includes('== environment')");
@@ -328,13 +347,13 @@ const scenarios = {
 		await page.emulate(PHONE, { touch: true, ua: MOBILE_UA });
 		await page.goto(`http://127.0.0.1:${port}/?simulate=nojspi`);
 		await page.waitFor("document.getElementById('app').dataset.state === 'error'", "error state", 15000);
-		const r = await page.evaluate(`({ open: document.getElementById('panel').classList.contains('open'),
+		const r = await page.evaluate(`({ open: ${SYSTEM_OPEN},
 			msg: document.getElementById('fatal-msg').textContent, hint: document.getElementById('fatal-hint').textContent,
-			dot: getComputedStyle(document.getElementById('status')).color, moduleLoaded: !!KW.started })`);
-		console.log(`  panel open=${r.open}, dot=${r.dot}, message: ${r.msg}`);
-		if (!r.open) throw new Error("panel did not open on the fatal error");
-		if (!/JSPI/.test(r.msg) || !/137/.test(r.hint)) throw new Error("panel does not explain the missing JSPI");
-		if (r.dot !== "rgb(255, 97, 102)") throw new Error("indicator is not red");
+			dot: getComputedStyle(document.getElementById('tb-status')).color, moduleLoaded: !!KW.started })`);
+		console.log(`  System open=${r.open}, status icon=${r.dot}, message: ${r.msg}`);
+		if (!r.open) throw new Error("System's window did not open on the fatal error");
+		if (!/JSPI/.test(r.msg) || !/137/.test(r.hint)) throw new Error("System's Errors do not explain the missing JSPI");
+		if (r.dot !== "rgb(255, 97, 102)") throw new Error("the status icon is not red");
 		if (r.moduleLoaded) throw new Error("the boot module was loaded although the preflight failed");
 		await checkLayout(page, "phone error");
 		await page.shot("mobile-error-nojspi.png");
@@ -348,7 +367,7 @@ const scenarios = {
 		});
 		await page.goto(`http://127.0.0.1:${port}/`);
 		await page.waitFor("document.getElementById('app').dataset.state === 'error'", "error state", 20000);
-		const r = await page.evaluate(`({ open: document.getElementById('panel').classList.contains('open'), msg: document.getElementById('fatal-msg').textContent,
+		const r = await page.evaluate(`({ open: ${SYSTEM_OPEN}, msg: document.getElementById('fatal-msg').textContent,
 			errors: KW.errors.map(e => e.kind + ': ' + e.message), kernelStage: KW.ui.stageState('kernel'), screen: KW.screenText() })`);
 		console.log(`  ${r.msg} (failed stage: ${r.kernelStage})`);
 		if (!r.open || !/404/.test(r.msg) || r.kernelStage !== "fail" || !/^\[FAILED\] Download the kernel/m.test(r.screen)) throw new Error(`unexpected: ${JSON.stringify(r)}`);
@@ -363,8 +382,8 @@ const scenarios = {
 		});
 		await page.goto(`http://127.0.0.1:${port}/`);
 		await page.waitFor("document.getElementById('app').dataset.state === 'error'", "error state", 30000);
-		const r = await page.evaluate(`({ open: document.getElementById('panel').classList.contains('open'), msg: document.getElementById('fatal-msg').textContent,
-			splash: document.getElementById('splash-msg').textContent })`);
+		const r = await page.evaluate(`({ open: ${SYSTEM_OPEN}, msg: document.getElementById('fatal-msg').textContent,
+			boot: document.getElementById('tb-boot-msg')?.textContent })`);
 		const started = await page.evaluate("!!KW.started");
 		console.log(`  ${r.msg}`);
 		if (!r.open || !/boot module/.test(r.msg) || started) throw new Error(`unexpected: ${JSON.stringify(r)}`);
@@ -377,7 +396,7 @@ const scenarios = {
 		await page.waitScreen(PROMPT, "shell prompt");
 		await page.evaluate(`globalThis.kernel.sendInput(${JSON.stringify("echo $((7*6))\r")})`);
 		await page.waitScreen("/^42\\s*$/m", "command output");
-		const r = await page.evaluate(`({ state: document.getElementById('app').dataset.state, mem: KW.memActualMiB, label: document.getElementById('status-label').textContent })`);
+		const r = await page.evaluate(`({ state: document.getElementById('app').dataset.state, mem: KW.memActualMiB, label: document.getElementById('tb-status-label').textContent })`);
 		console.log(`  state=${r.state} (${r.label}), allocated ${r.mem} MiB`);
 		if (r.state !== "running" || r.mem !== 128) throw new Error(`unexpected: ${JSON.stringify(r)}`);
 	},

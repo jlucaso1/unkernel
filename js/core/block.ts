@@ -1053,7 +1053,9 @@ export interface HttpBaseOptions {
 	/**
 	 * Then fetch [prefetch, background) in the background (the warm set:
 	 * what the first commands after the boot read): once the prefetch has
-	 * settled and no request has been made for a second (the boot is done),
+	 * settled, the image has been read from (the guest runs: an image is
+	 * often opened while its kernel still loads) and then neither read nor
+	 * requested for a second (the boot is done),
 	 * in sequential streamed pieces of `maxRequest` bytes, one at a time, so
 	 * a read waits at most for its own bytes of the piece in flight and
 	 * fetches chunks of a later piece itself. Not with the browser's Save-Data
@@ -1095,6 +1097,8 @@ export class HttpBase implements DiskBase {
 	chunks: Map<number, Uint8Array> = new Map();
 	/** Chunk index -> fetch in flight (a prefetched chunk: until its bytes arrived). */
 	pending: Map<number, Promise<void>> = new Map();
+	/** read() calls so far (the background tier waits for the first, then for a second without one). */
+	#reads = 0;
 	stats: HttpBaseStats = {
 		requests: 0, bytes: 0, lazyRequests: 0, prefetch: 0, prefetchBytes: 0, prefetchState: "none",
 		background: 0, backgroundBytes: 0, backgroundState: "none", aheadRequests: 0, aheadBytes: 0,
@@ -1154,6 +1158,7 @@ export class HttpBase implements DiskBase {
 	}
 
 	read(off: number, len: number): MaybePromise<Uint8Array> {
+		this.#reads++;
 		const cs = this.chunkSize;
 		const c0 = Math.floor(off / cs), c1 = Math.floor((off + len - 1) / cs);
 		const waits: Promise<void>[] = [];
@@ -1360,8 +1365,9 @@ export class HttpBase implements DiskBase {
 
 	/**
 	 * The background tier (HttpBaseOptions.background): [from, to) once
-	 * `boot` (the prefetch) has settled and no request has been made for a
-	 * second, in pieces of maxChunks chunks, one after the other. A failed
+	 * `boot` (the prefetch) has settled, the first read() has come and then
+	 * no read() and no request for a second, in pieces of maxChunks chunks,
+	 * one after the other. A failed
 	 * piece ends it (what is left is read lazily).
 	 */
 	async #background(from: number, to: number, validator: string, boot: Promise<void>): Promise<void> {
@@ -1373,9 +1379,11 @@ export class HttpBase implements DiskBase {
 		}
 		await boot;
 		const nap = (ms: number) => new Promise<void>((r) => (setTimeout(r, ms) as unknown as { unref?: () => void }).unref?.());
-		for (let seen = this.stats.requests, quiet = 0; quiet < 1000;) {
+		while (!this.#reads) await nap(250);
+		for (let seen = this.stats.requests + this.#reads, quiet = 0; quiet < 1000;) {
 			await nap(250);
-			if (this.stats.requests !== seen || this.pending.size) { seen = this.stats.requests; quiet = 0; } else quiet += 250;
+			const now = this.stats.requests + this.#reads;
+			if (now !== seen || this.pending.size) { seen = now; quiet = 0; } else quiet += 250;
 		}
 		this.stats.backgroundState = "running";
 		const piece = this.maxChunks * this.chunkSize;

@@ -3,12 +3,13 @@
 # Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 # /kw/lib/sysinit: sysinit of the base shell (/etc/inittab), which
 # /init starts when there is no distro to boot (why= in /run/kw-base says why):
-# the kw layer's rc (devpts, shm, hostname) and net (lo, eth0 by DHCP), a
-# tmpfs on /tmp, then the reason and /init's messages (welcome).
+# the kw layer's rc (devpts, shm, hostname), a tmpfs on /tmp, net (lo, eth0
+# by DHCP in the background: inittab's kwtty serve waits for it, the
+# console's shell does not), then the reason and /init's messages (welcome).
 
 /usr/lib/kw/rc
 mount -t tmpfs -o nosuid,nodev,mode=1777 tmpfs /tmp
-/usr/lib/kw/net
+/usr/lib/kw/net background
 echo "unkernel base shell ($(cat /kw/layer/usr/lib/kw-base)): $(sed -n 's/^why=//p' /run/kw-base)"
 /usr/lib/kw/welcome
 mountpoint -q /data && echo "/data is mounted: kw-overlay status [NAME] shows a distro's changes."

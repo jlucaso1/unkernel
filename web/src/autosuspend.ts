@@ -124,7 +124,7 @@ export function resumeRequestKind(v: string | null | undefined): ResumeRequest {
 /** The last load asked for the resume (the Resume button, a suspend in the background): no question, also on another CPU count. */
 export const resumeAskedFor = (request: ResumeRequest): boolean => request === "auto" || request === "hand";
 /**
- * A load starts quiet (boot.ts: the splash "Resuming" stays and the host's
+ * A load starts quiet (boot.ts: the boot indicator says "Resuming" and the host's
  * boot lines are held back, so the first thing the terminal shows is the
  * screen as it was): every load that may resume, whether asked for or a
  * plain load (until it knows it can), the same way; not the load after

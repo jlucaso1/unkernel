@@ -1,4 +1,4 @@
-From 1901746a4ef076bd35f6806d56aadcf387e9a788 Mon Sep 17 00:00:00 2001
+From 7c303d3de8eb7e084b08665e8a383877d060b63d Mon Sep 17 00:00:00 2001
 From: kernel-wasm <kernel-wasm@localhost>
 Date: Mon, 16 Nov 2026 13:12:25 +0000
 Subject: [PATCH] wasm: optional atomics and shared-memory builds (KW_ATOMICS,

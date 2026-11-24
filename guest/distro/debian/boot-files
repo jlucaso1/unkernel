@@ -41,6 +41,7 @@ usr/lib/aarch64-linux-gnu/libcap.so.2.75
 usr/lib/aarch64-linux-gnu/libpcre2-8.so.0.14.0
 usr/lib/aarch64-linux-gnu/libselinux.so.1
 usr/lib/aarch64-linux-gnu/libtinfo.so.6.5
+usr/lib/kw/wlandr
 usr/lib/kw-distro
 usr/lib/kw-image
 usr/lib/locale/C.utf8/LC_ADDRESS

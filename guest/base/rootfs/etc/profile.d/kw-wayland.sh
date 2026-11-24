@@ -13,7 +13,10 @@
 # X or ask are told to use Wayland: XDG_SESSION_TYPE (Chromium's and
 # Electron's automatic choice, Qt, session-aware apps), GTK, Qt, SDL,
 # Firefox, Electron. Each only where unset; the X fallbacks stay for apps
-# without a Wayland backend. Debian's chromium wrapper takes its flag from
+# without a Wayland backend. The page's desktop is dark, so apps are asked
+# for their dark variant: GTK by /etc/gtk-3.0 and gtk-4.0/settings.ini,
+# libadwaita (which ignores that setting and would ask a settings portal,
+# and none runs) by ADW_DEBUG_COLOR_SCHEME, Chromium by its flag. Debian's chromium wrapper takes its flag from
 # /etc/chromium.d/kw-wayland instead (it clears CHROMIUM_FLAGS).
 # Shell builtins only: every shell start reads this. [ -O / ] is root
 # ($UID is bash's only).
@@ -42,6 +45,16 @@ if [ -n "${WAYLAND_DISPLAY:-}" ]; then
 	export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
 	export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
 	export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland,x11}"
+	# SDL 2.32 hangs before its window's first buffer when the compositor answers
+	# the decoration protocol with "client-side" (wland's default: it draws no
+	# title bars): it moves the window to libdecor in the middle of its wait for
+	# the first configure. Preferring libdecor from the start avoids that move;
+	# with the plugin (libdecor-0-plugin-1-cairo) the window gets a title bar,
+	# without it none, and it maps either way. The web page asks wland for
+	# server-side decorations, which libdecor takes: there the window gets the
+	# page's frame.
+	export SDL_VIDEO_WAYLAND_PREFER_LIBDECOR="${SDL_VIDEO_WAYLAND_PREFER_LIBDECOR:-1}"
 	export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
 	export ELECTRON_OZONE_PLATFORM_HINT="${ELECTRON_OZONE_PLATFORM_HINT:-auto}"
+	export ADW_DEBUG_COLOR_SCHEME="${ADW_DEBUG_COLOR_SCHEME:-prefer-dark}"
 fi

@@ -1,45 +1,88 @@
 # The browser page (`web/`)
 
-A static page: a full-screen terminal ([wterm](https://wterm.dev/)), with
-more terminal windows over vsock, a tmux-style status line at the bottom
-and terminal-style dialogs, built with React and Tailwind (v4, a black
+A static page in the manner of a macOS desktop, drawn in the DOM: windows
+(the page's own window manager) on a wallpaper, a Dock at the bottom, a
+transparent top bar (menus, resource meters, the Control Center) and a
+launcher with the apps in folders. The kernel's console and the other
+terminals ([wterm](https://wterm.dev/); more sessions over vsock) are
+tabs of Terminal windows; the guest's display, the guest preview
+(Browser), Settings and System, an app's installer and the guest's
+Wayland apps are windows too. Built with React and Tailwind (v4, a dark
 theme after Vercel's Geist), Vite (client) and Nitro (server and route
 rules), on the SDK from source. The top-level README.md describes it for
 users.
 
 ## Files
 
-`web/index.html` (the inline error bootstrap, and fallback markup that
-React replaces), and in `web/src/`: `main.tsx` (entry: config, renders the
-app, preflight with the SDK's `checkSupport()`), `config.ts` (the
-settings, kept in localStorage, documented at its top), `store.ts` (the UI state, read with
-`useStore()`), `ui.ts` (`KW.ui`: the imperative API boot.ts and main.tsx
-drive, plus `nextSettings()`), `shortcuts.ts`, `boot.ts` (terminal and boot,
-a separate chunk loaded only after the preflight passes), `windows.ts`
-(terminal windows 1-9), `bottom.ts` (keeps a terminal at its bottom when
-it gets shorter), `net.ts` (Wisp only), `apk.ts` (apk index prefetch), `download.ts` (files the page fetches for the guest), `sudo.ts` (root in the guest: `SUDO_SH`, `execAsRoot()`), `sdk.ts`, `kw.ts` (`window.KW`),
-`data.ts` (the data disk), `session.ts` (the suspended session), `autosuspend.ts` (suspending in the background and the question on leaving: when, decided without a DOM), `display.ts` (the guest display's state, the
-mode offered, keyboard routing), `audio.ts` (Web Audio output),
-`preview.ts` (the guest preview's page side), `wayland.ts` (the Wayland
-desktop: wland on vsock and kwshm), `open.ts` (the guest's
-`open` and `xdg-open`, host commands: a URL on the guest's own address in
-the preview, any other http(s) URL in a new tab, each only after the user
-confirms), `sw.ts` (the service
-worker's registration and the update check), `launcher.ts` (how a demo
-runs; the demos are in `src/demos/`), `style.css`
-(Tailwind theme, the dialog, wterm's colours). `src/components/`: `App.tsx`
-(layout, viewport, key bar visibility, pinch), `Bar.tsx` (the status line), `Launcher.tsx` (its first item and the
-launcher overlay),
-`Panel.tsx` (the dialog), `Options.tsx`, `Display.tsx` (the display layer,
-rotation, mouse and touch input, touch controls), `Desktop.tsx` (the
-Wayland desktop's layer), `Keys.tsx` (extra keys),
-`Overlays.tsx` (splash, toast, paste and confirm dialogs), `About.tsx`
-(the status line's triangle and the credits dialog), `Preview.tsx`
-(the preview panel), `icons.tsx`. `src/env.d.ts` declares `__KW_BUILD__`,
+`web/index.html`: the inline error bootstrap, the wallpaper's first paint
+(from localStorage `kw.wallpaper-hint`, before any module runs) and a
+static copy of the desktop as App.tsx first draws it (the console's
+window, the Dock, the top bar with the boot indicator), which React
+replaces in the same frame. In `web/src/` (most files are described at
+their top):
+
+- Entry and state: `main.tsx` (entry: config, renders the app, preflight
+  with the SDK's `checkSupport()`), `config.ts` (the settings, kept in
+  localStorage, documented at its top), `store.ts` (the UI state, read
+  with `useStore()`), `ui.ts` (`KW.ui`: the imperative API boot.ts and
+  main.tsx drive, plus `nextSettings()`), `kw.ts` (`window.KW`),
+  `prefs.ts` (the page's small preferences, localStorage `kw.<name>`),
+  `focus.ts` (whether keys typed somewhere are the guest's or the page's),
+  `hooks.ts`, `format.ts`.
+- The machine: `boot.ts` (terminal and boot, a separate chunk loaded only
+  after the preflight passes), `sdk.ts`, `net.ts` (Wisp, and the
+  plain-HTTP hosts answered with `fetch()`), `apk.ts` (apk index
+  prefetch), `download.ts` (files the page fetches for the guest),
+  `drop.ts` and `upload.ts` (host files dropped on the page, into the guest),
+  `sudo.ts` (root in the guest: `SUDO_SH`, `execAsRoot()`), `data.ts` (the
+  data disk), `session.ts` (the suspended session), `autosuspend.ts`
+  (suspending in the background and the question on leaving: when,
+  decided without a DOM), `display.ts` (the guest display's window, the
+  mode offered, keyboard routing), `audio.ts` (Web Audio output),
+  `stats.ts` (the resource sampler), `preview.ts` and `preview-ws.ts` (the
+  guest preview's page side), `open.ts` (the guest's `open` and
+  `xdg-open`, host commands: a URL on the guest's own address in the
+  preview, any other http(s) URL in a new tab, each only after the user
+  confirms), `wayland.ts` and `wayland/` (the guest's Wayland apps: wland
+  on vsock and kwshm), `sw.ts` (the service worker's registration and the
+  update check), `profile.ts` (`/profile.html`).
+- The desktop: `wm.ts` (the window manager), `wmsnap.ts` (the tiles'
+  geometry), `wmfx.ts` (the windows' effects), `appwindows.ts` (which
+  launcher app a window stands for, and what the chrome calls it),
+  `winmenu.tsx` (a window's menu items, shared by its Dock tile and the
+  top bar's app menu), `desktop.ts` (the wallpaper), `pins.ts` (the Dock's
+  pins), `keys.ts` (the shortcut table and its dispatch), `terminals.ts`
+  (the terminal actions), `termtabs.ts` (the Terminal windows and their
+  tabs), `wterms.ts` (terminals 1-9), `bottom.ts` (keeps a terminal at
+  its bottom when it gets shorter), `autohide.ts` (the console minimizing
+  itself after boot), `sysapps.ts` (the Settings and System windows),
+  `launcher.ts` (how an app runs), `installer.ts` (an app's install, out
+  of sight), `showcase.ts`.
+- `apps/`: the launcher's apps (Launcher, below); `apps/sdlwl.ts`,
+  `apps/xkms.ts` and `apps/xwl.ts` are what the SDL Wayland games, the
+  apps on X on the DRM device and the Xwayland apps share.
+- `style.css` (Tailwind theme, the chrome's materials, wterm's colours).
+- `components/`: `App.tsx` (layout, viewport, key bar visibility, pinch),
+  `Workspace.tsx` (the windows' area; it opens the console's window),
+  `Window.tsx` (a window's frame), `SnapPreview.tsx`, `Wallpaper.tsx`,
+  `DesktopMenu.tsx` (the bare desktop's menu), `Dock.tsx`,
+  `DockStack.tsx` (a pinned group's popover), `TopBar.tsx`,
+  `BootIndicator.tsx`, `ControlCenter.tsx`, `Glance.tsx` (its
+  resources), `Charts.tsx`, `Launcher.tsx`, `Installer.tsx`,
+  `TerminalTabs.tsx` and `Tabs.tsx`, `KeysHud.tsx`, `KeyHint.tsx`,
+  `Keys.tsx` (the key bar), `Menu.tsx`, `Apps.tsx` and `AppShell.tsx` (the
+  system apps' portals and frame), `Settings.tsx`, `Options.tsx`,
+  `DesktopSettings.tsx`, `SystemInfo.tsx`, `Overview.tsx`, `About.tsx`,
+  `Display.tsx` and `Pad.tsx` (the display's content: rotation, mouse and
+  touch input, touch controls), `Preview.tsx` (the Browser's content),
+  `WaylandOutput.tsx`, `Dialog.tsx`, `Overlays.tsx` (the confirm and paste
+  dialogs, the Resume card, the toast), `icons.tsx`.
+
+`src/env.d.ts` declares `__KW_BUILD__`,
 which `vite.config.ts` defines: the Linux release read from the committed
 kernel's banner, the kernel's release tag and the page's commit (empty
 where git is missing or the clone is too shallow). `web/public/vm-sw.js` is the page's
-service worker (the preview's relay), `web/server/vm.ts` the preview's server fallback,
+service worker (the preview's relay), `web/public/vm-ws.js` the preview's WebSocket shim, `web/server/vm.ts` the preview's server fallback,
 `web/server/distros.ts` the built Node server's `/distros/` handler and
 `web/server/range.ts` the Range logic it shares with the dev server,
 `web/scripts/kernel.ts` what the page runs (below).
@@ -86,7 +129,7 @@ deploying the page needs no kernel toolchain.
      what to do: build locally (`kernel/build.sh all`), cut a release, or
      name a release that has them. So a deploy (Vercel) and CI ship a
      release, never a local build.
-  1 and 2 show as "local build" in the About dialog, 3 as the release's tag.
+  1 and 2 show as "local build" in About (Settings), 3 as the release's tag.
 - A release is downloaded at build time (the dev server only when it has no
   copy yet, and then without a network check), because GitHub serves
   release assets without CORS (both the `github.com` redirect and
@@ -120,7 +163,7 @@ deploying the page needs no kernel toolchain.
   fails with that message.
 - The kernel must match the page: a local base bundle whose kwemu ABI is
   not `KW_ABI_VERSION` only gets a warning, a release is refused (above).
-  The page's texts and demos (the Ubuntu demo's arm64 tarball, the
+  The page's texts and apps (the Ubuntu app's arm64 tarball, the
   launcher's aarch64 packages) are written for this checkout's guest.
   Order after an ABI or guest change: merge, cut a release (the workflow),
   then deploy the page; a page build that takes the newest release before
@@ -190,8 +233,9 @@ deploying the page needs no kernel toolchain.
     `cache: "no-cache"` (the one request that revalidates), then reads the
     prefetch the image's distro header names (Alpine: the whole image, one
     plain GET; Debian: one streamed Range request of its first 4 MiB), the
-    background tier it names once the boot is quiet (Debian: the warm set,
-    apt's files, from 4 to 27 MiB, in 4 MiB Range requests one at a time),
+    background tier it names once the guest has read the image and the
+    boot is quiet (Debian: the warm set, apt's files, from 4 to 27 MiB, in
+    4 MiB Range requests one at a time),
     and lazy and read-ahead ranges (256 KiB-aligned; read-ahead up to 4 MiB),
     all `cache: "force-cache"`, comparing each response's
     ETag with the opening one's and fetching a mismatch again with
@@ -250,28 +294,34 @@ deploying the page needs no kernel toolchain.
   defaults). Reboot saves the options there and loads the bare URL; a URL
   parameter of the same name overrides the saved one for that load (the
   browser tests use that), and the page never writes the URL (where
-  localStorage refuses, Reboot puts them in the URL instead). Every
-  setting except `?shared` has a control under Options in the System tab
-  (`Options.tsx`, the store's `options`, `nextSettings()`); `?simulate`
-  and `?showcase` are URL only. A new setting needs a control too. The
-  desktop test checks the mapping. The
-  fields are controlled, and also read by native listeners on the form,
-  because React drops change events for a value set from script (the test
-  does that).
-- `window.KW` is what the browser tests read, together with the element
-  ids: `#bar-win-N` (window N), `#bar-new`, `#bar-display`, `#bar-desktop`, `#bar-log`,
-  `#bar-errors`, `#status` (its CSS `color` turns red on an error) and
-  `#status-label`, `#panel` (class `open`), `#confirm`. Keep them working.
+  localStorage refuses, Reboot puts them in the URL instead). Every saved
+  setting except `?shared` has a control in Settings (`Options.tsx`'s
+  groups, shown in Settings' sections; the store's `options`,
+  `nextSettings()`); `?simulate`, `?showcase`, `?routes` and `?autohide`
+  are URL only, and so are the this-load-only `?gpu`, `?shm`, `?wlgpu`,
+  `?glload` and `?glwait`. A new setting needs a control too. The desktop
+  test checks the mapping. The fields are controlled, and also read by
+  native listeners on the form, because React drops change events for a
+  value set from script (the test does that).
+- `window.KW` is what the browser tests read (`KW.windows`, `KW.wm`,
+  `KW.wayland`, `KW.ui`...), together with the element ids: `#desktop`,
+  `#workspace`, `#term` and `#term-tab-N`, `#topbar` with `#tb-status`
+  (the Control Center's item; red on an error) and `#tb-cc-system`,
+  `#dock`, `#dock-launcher`, `#dock-wayland`, `#launcher-grid` and
+  `#launcher-folder` (tiles by `data-folder` and `data-app`),
+  `#installer-<app>` and its parts, `#system` and `#settings` (class
+  `open` while their window shows), the options' `#opt-*`, `#confirm`,
+  `#keys`, `#fb-layer`, `#wl-desktop`. Keep them working.
 - Safe areas are the CSS variables `--st`, `--sr`, `--sb`, `--sl` (style.css). On iOS,
-  `--sb` is three quarters of the bottom inset: the status line's background reaches the
-  bottom edge, its contents sit that far above it, and it moves its ends in by `--sc`
-  (half the bottom inset) for the round corners. While the on-screen keyboard is up
-  (`App.tsx` sets `kb` on the root when the visual viewport is well below the layout
-  viewport, so on iOS) both are 0 and the status line is hidden. In an iOS home screen
-  app `--st` is 24 px more than the top inset: iOS fades the page's top 20 px or so
-  there.
+  `--sb` is three quarters of the bottom inset: the Dock sits that far above the bottom
+  edge, over the wallpaper that goes on under the home indicator, and moves its ends in
+  by `--sc` (half the bottom inset) for the round corners. While the on-screen keyboard
+  is up (`App.tsx` sets `kb` on the root when the visual viewport is well below the
+  layout viewport) both are 0 and the top bar and the Dock are hidden (the key bar
+  stays). In an iOS home screen app `--st` is 24 px more than the top inset: iOS fades
+  the page's top 20 px or so there.
   On macOS outside fullscreen, `main.tsx` sets `mac-window` on the root and `--sc` is
-  8 px, for the window's round bottom corners.
+  8 px, for the window's round bottom corners, which the Dock would run into.
   In a home screen app (standalone) `App.tsx` sizes `#app` to the layout viewport's height
   unless the keyboard is up (the visual viewport can stay short after it closed). The
   status bar style is `black`, not `black-translucent`: with that, iOS 26+ makes the
@@ -285,8 +335,9 @@ deploying the page needs no kernel toolchain.
   Pause) or suspended, `…` starting, resuming or suspending, `■` halted or
   powered off, `!` failed. Only that mark is replaced; the rest of the
   title is kept as found.
-- An unknown or failed boot step must end in `ui.fail(...)`, so the
-  indicator turns red and the panel opens. The page must never stay blank.
+- An unknown or failed boot step must end in `ui.fail(...)`, so the top
+  bar's status (and the boot indicator, while the boot is not over) turns
+  red and System's window opens on Errors. The page must never stay blank.
   `index.html` installs `error`/`unhandledrejection` handlers first and
   reports the page module if it has not run after 8 s; `main.tsx` imports
   the boot chunk only after `checkSupport()` passed. A missing feature, a
@@ -297,45 +348,69 @@ deploying the page needs no kernel toolchain.
   refuses the allocation the runtime retries with
   `DEFAULT_MEMORY_FALLBACK_MIB` (1024 down to 64, `js/web/memory.ts`).
   Alpine boots in 48 MiB.
-- Keyboard shortcuts (`shortcuts.ts`): Ctrl-A is a prefix as in GNU
-  screen, and ⌘A too on Apple devices (it takes nothing from the guest). Digits
-  are windows, as in screen and tmux (also Ctrl-Shift-digit, which
-  terminals and browsers leave unused), so new shortcuts use letters. New
-  window is n or c (as in tmux); the launcher is o, also ⌘K on Apple devices
-(a `meta` code in COMMANDS; Ctrl-K is readline's kill-line, so not that
-elsewhere) and Ctrl-Shift-O; Copy diagnostics is y after the prefix
-  and c inside the dialog. The listener is
-  on window in the capture phase and is added before display.ts's, so the
-  shortcuts work while a program holds the evdev keyboard; key-ups always
-  pass, so a Ctrl the guest saw go down comes up.
-- The dialog is modal and keyboard-usable (`aria-modal`, `inert` while
-  closed, ARIA tabs, focus trapped and returned). Options are real inputs,
-  so keyboards and screen readers work on them. Questions use `ui.ask()`,
-  a native modal `<dialog>`, never `confirm()`; it releases pointer lock
-  first.
-- Display and input: the mode offered to the guest is the stage size in
-  CSS pixels (turned when the rotate chip is on), and the canvas is scaled
-  to fit. kwfb takes it at a program's first open; virtio-gpu (guest GL)
-  is told when the stage settles at another size (a ResizeObserver on the
-  stage and the rotate chip, `vm.updateDisplaySize()` 300 ms after the
-  last change: window resizes, full screen, a turned phone, the preview
-  docked), a hotplug with the new preferred mode; the canvas follows the
-  mode the guest then sets (gl.md, Display size). While a program has the evdev keyboard open, keys go to it and
-  not to the terminal. With the tablet open the pointer goes there as
+- Keyboard shortcuts (`keys.ts`, described at its top; its `COMMANDS`
+  table is what Settings' Keyboard section and the shortcuts HUD list):
+  Ctrl-A is a prefix as in GNU screen, and ⌘A too on Apple devices (it
+  takes nothing from the guest; ⌘ may stay held for the key); Ctrl-A
+  twice sends one Ctrl-A on. Digits are terminals, as windows are in
+  screen and tmux (0 the console; also Ctrl-Shift-digit, which terminals
+  and browsers leave unused), and the arrows snap the focused window, so
+  new shortcuts use letters. A new tab is n or c (as in tmux), a new
+  Terminal window N, x closes the current terminal; the launcher is o,
+  also ⌘K on Apple devices (a `meta` code in COMMANDS; Ctrl-K is
+  readline's kill-line, so not that elsewhere) and Ctrl-Shift-O; p the
+  Browser, d the Display, w the Wayland windows, z Suspend, r Reboot, y
+  Copy diagnostics, and s, g, i, l, e, ?, `,` and a open the system apps
+  on a section. Controls name their command by its id (`keyFor()`), so
+  the hints on the Dock, the top bar, the tabs and the menus follow the
+  table. The listener is on window in the capture phase and is added
+  before display.ts's, so the shortcuts work while a program holds the
+  evdev keyboard; key-ups always pass, so a Ctrl the guest saw go down
+  comes up. In a system app's window Esc closes it.
+- Questions use `ui.ask()`, a native modal `<dialog>` (`#confirm`,
+  Dialog.tsx `Alert`), never `confirm()`; it releases pointer lock first,
+  and keys typed in it go no further. One the guest asks (`untrusted`:
+  `open.ts`) takes OK, Enter and y only after a moment, so a key meant for
+  the terminal cannot confirm it. Options are real inputs, so keyboards
+  and screen readers work on them.
+- Display and input (`display.ts`, `Display.tsx`, both described at their
+  top): the guest's display is a window (id `display`, Dock tile
+  `#dock-display`, Ctrl-A d) that opens, focused, when a program attaches
+  it and goes when it lets go; closing or minimizing it only hides the
+  picture. The mode offered to the guest is the window's content box in
+  CSS pixels (before the window exists, the box it would open at: its
+  last geometry, else a 4:3 box in the workspace's middle; turned while it
+  covers a portrait phone turned), and the canvas is scaled to fit. kwfb
+  takes it at a program's first open; virtio-gpu (guest GL) is told when
+  the box settles at another size while shown (a ResizeObserver,
+  `vm.updateDisplaySize()` 300 ms after the last change: the window
+  resized or maximized, the page resized, full screen, rotation), a
+  hotplug with the new preferred mode; the canvas follows the mode the
+  guest then sets (gl.md, Display size). While the Display window has the
+  focus and a program has the evdev keyboard open, keys go to it; other
+  windows keep theirs. With the tablet open the pointer goes there as
   absolute positions and nothing locks; this wins when both mice are open.
-  Otherwise a click with the relative mouse open takes pointer lock. Phone
-  keyboards send no usable keydowns, so a hidden input's value is diffed
-  against a sentinel and sent as US-layout key presses. Pointer positions
-  under rotation go through `unturn()`/`localPos()` (Display.tsx). Touch
-  layout choices are in localStorage (`kw.*`).
-- Terminal windows (`windows.ts`): 1-9 are `vm.spawn()` sessions (js.md),
-  each its own wterm. Output is read all the time, shown or not, since an
-  unread `Pty` blocks its programs; the reader takes the next chunk only
-  after `write()` returned and yields a task (a MessageChannel, which
-  background tabs do not throttle) every 16 ms or 256 KiB. `KW.windows`
-  is their API. Every window's session is detachable (`detachable: true`),
-  so it survives Suspend and resume (below). Checked by hand only (no
-  browser test yet).
+  Otherwise a click with the relative mouse open takes pointer lock. On
+  touch devices the window may cover the whole page, Dock and top bar
+  included (`#fb-cover`: a quarter turn while the page is portrait and the
+  rotate option is on, or unturned in full screen). Phone keyboards send
+  no usable keydowns, so a hidden input's value is diffed against a
+  sentinel and sent as US-layout key presses. Pointer positions under
+  rotation go through `unturn()`/`localPos()` (display.ts). Touch layout
+  choices are in localStorage (`kw.*`).
+- Terminals (`wterms.ts`): 0 is the console (hvc0, boot.ts), 1-9 are
+  `vm.spawn()` sessions (js.md), each its own wterm (`.term-pty`), each a
+  tab of a Terminal window (The desktop, below). Output is read all the
+  time, shown or not, since an unread `Pty` blocks its programs (a hidden
+  terminal only has its painting paused); the reader takes the next chunk
+  only after `write()` returned and yields a task (a MessageChannel, which
+  background tabs do not throttle) every 16 ms or 256 KiB. A tty N tab is
+  titled with its foreground program (one `vm.exec()` a second reads them
+  from /proc while such a terminal is open). The shell exiting closes its
+  tab; the kernel stopping closes them all. `KW.windows` is their API
+  (named so for the tests: its windows are the terminals), which
+  `test/wland/page-check.mjs` types through. Every session is detachable
+  (`detachable: true`), so it survives Suspend and resume (below).
 - Worker mode (the default where the page is cross-origin isolated, else
   off; `?worker=0` / `?worker=1` pick; implied by several CPUs) boots through the SDK's worker mode (js.md):
   the page compiles the kernel and passes the `WebAssembly.Module`; disks
@@ -354,14 +429,24 @@ elsewhere) and Ctrl-Shift-O; Copy diagnostics is y after the prefix
 - Every response carries COOP/COEP. A secure context is therefore
   cross-origin isolated, which worker mode's shared transport needs (the
   kernel's own memory is not shared). Anything cross-origin that the page
-  loads must send CORP (WebSockets are exempt).
-- The guest network is Wisp only. A page served from an origin outside the
+  loads must send CORP or be fetched with CORS (the wallpaper photos);
+  WebSockets are exempt.
+- The guest network is Wisp, plus `fetch()` for the plain-HTTP hosts of
+  `DEFAULT_ROUTES` (config.ts: deb.debian.org through the page's CORS
+  mirror, apt.ladybird.org through its /ladybird, and mirror.unkernel.dev
+  itself, whose other paths are asked before the upstreams: /github and
+  /ollama (llama.cpp's and Ollama's release files, Ollama's registry) by
+  the llama.cpp and Ollama apps' scripts, and /claude, /nodejs, /opencode,
+  /astral and /github/astral-sh/uv by the install shim, only where the
+  name resolves to a routed address (it checks nothing against a
+  checksum); the Ubuntu app's tarball is the page's own fetch of /ubuntu; `?routes=0` sends them
+  through Wisp too). A page served from an origin outside the
   Wisp server's allow list needs its own Wisp server (js.md). A `ws://`
   server is blocked as mixed content on an `https://` page.
 - The distro (above): `?distro=<name>` (default `debian`, else the first
   image; an unknown name boots the default, with a warning line, a toast,
-  the Environment tab's Distro row and the option's note; `none` attaches
-  no image: the base shell). Its option is the Distro radios
+  the Distro row in System's Environment and the option's note; `none` attaches
+  no image: the base shell). Its option is Settings' Distro radios
   (`#opt-distro-<name>`, `#opt-distro-none`, `#opt-distro-note`). Inline,
   boot.ts opens the image with `openDistroDisk()` while the kernel
   downloads, so the resume check sees the snapshot's disks (`[distro,
@@ -380,7 +465,7 @@ elsewhere) and Ctrl-Shift-O; Copy diagnostics is y after the prefix
   warning row and a report. Checked 2026-11-19 with headless Chromium (a
   scratch script, not in `web/test/`) on the built Node server and the dev
   server, from a scratch build of the current sources: both distros, the
-  switch through Options and Reboot, per-distro changes on the data disk,
+  switch through the Distro option and Reboot, per-distro changes on the data disk,
   `?data=0`, `?worker=1`, `?cpus=2`, `?root=initramfs`, `?distro=none` and
   an unknown name, suspend and resume (inline and worker) and the refusal
   across distros, the data disk reset (`KW.resetData()`), and the
@@ -406,40 +491,230 @@ elsewhere) and Ctrl-Shift-O; Copy diagnostics is y after the prefix
   of the root with the data disk's changes failed, so this boot runs the
   plain image on a tmpfs upper; the changes stay in
   `/data/distros/<name>/upper`, and every boot checks them again. The
-  panel note (`data-safe-note`), a toast and the Root row say so, with
-  `kw-overlay status` and `kw-overlay discard`. `?root=initramfs` (the
-  Safe mode button) is the same for one boot by choice.
+  note in Settings' Storage section (`#data-safe-note`), a toast and the
+  Root row say so, with `kw-overlay status` and `kw-overlay discard`.
+  `?root=initramfs` (Storage's Safe mode button, `#data-safe`; the Control
+  Center's Leave safe mode ends it) is the same for one boot by choice.
 - A guest `reboot` (halt code 2) reloads the page once the last data-disk
   save has committed, at most 3 times a minute per tab (sessionStorage
   `kw-auto-reboot`); then the page stays halted and says why.
-- Kernel messages go to the Kernel log tab; during boot only the newest
+- Kernel messages go to System's Kernel log; during boot only the newest
   shows on a transient line, and IMPORTANT ones (`js/core/console.ts`) are
   written in full. Once user space prints, "Started Linux" (the kernel until
   it runs `/init`), "Started Alpine" (the base mounting the image and the
   distro's init; "Started the base shell" without one), the "Booted
   in" summary, two notes (the repository as an OSC 8 link, and how to
-  open the demo launcher; not on a resumed session), with Pip from the
+  open the app launcher; not on a resumed session), with Pip from the
   logo (`assets/logo.svg`) in truecolor half blocks to their left when
   the terminal is wide enough, and the buffered
   user-space output follow; nothing is scrolled away or erased. The desktop test checks the order.
 - wterm (`@wterm/dom`, Apache-2.0; xterm.js was dropped because its touch
   scrolling had no momentum) renders rows as DOM text, and `#term` (and
-  each `.term-win`) is itself the scroll container, so `#term` must not
-  set `overflow`. When it gets shorter while scrolled to the bottom,
-  App.tsx puts it back at the bottom before wterm refits (wterm would
-  otherwise show the prompt behind the keyboard). React renders `#terms`
-  and `#term` once and never touches them again. wterm takes the row
+  each `.term-pty`) is itself the scroll container, so it must not set
+  `overflow`. When one gets shorter while scrolled to the bottom, it is
+  put back at the bottom before wterm refits (`bottom.ts`: App.tsx for the
+  console, wterms.ts for the others; wterm would otherwise show the prompt
+  behind the keyboard). Workspace.tsx makes `#term` once, in the console's
+  window, and nothing touches it again. A Terminal window's tabs are
+  stacked in one box (`.term-stack`), the inactive ones hidden with
+  visibility, so they keep their grid and size. wterm takes the row
   height from `--term-row-height`, so `setTermFont()` sets both together.
   `KW.screenText()` reads its core directly, because `readText()` is async.
-- Phones never zoom the page: a pinch sets the font size, two-finger
-  touchmoves and Safari's `gesture*` events are cancelled (iOS ignores
-  `user-scalable=no`), and wterm's hidden textarea is 16 px, because iOS
-  zooms on focusing a smaller field.
+- Phones never zoom the page: a pinch on the desktop (not over the
+  display) sets the font size, two-finger touchmoves and Safari's
+  `gesture*` events are cancelled (iOS ignores `user-scalable=no`), and
+  wterm's hidden textarea is 16 px, because iOS zooms on focusing a
+  smaller field.
+
+## The desktop
+
+- Window manager (`wm.ts`, described at its top; React only draws it:
+  Workspace.tsx, Window.tsx, Dock.tsx). The modules that own windows open
+  and drive them through `wm` (termtabs.ts, display.ts, preview.ts,
+  sysapps.ts, installer.ts, wayland/), never through React, each with a
+  `WindowSpec`: a stable id; `meta` (apps/types.ts `AppMeta`: the name,
+  icon and key the top bar, its Dock tile and its title bar show); a
+  frame (`normal`, or `none` for an app that draws its own decorations and
+  starts moves and resizes itself); content (an element mounted once and
+  never recreated, so an app may keep state in it, or a React node);
+  geometry in workspace px; `closable`, `resizable` (a fixed-size window:
+  an installer); and callbacks (`onClose` may refuse, `onFocus`/`onBlur`,
+  `onVisible`: a hidden window's app stops painting, `onResize`). Windows
+  stay in the order they opened (the Dock's and the DOM's) and z-index is
+  the z-order, so raising one moves no DOM node. One window has the focus:
+  the top one that is not minimized. A minimized window keeps its box
+  (visibility, inert), so a terminal keeps its grid and its size and the
+  API reads it as before.
+- The workspace (`#workspace`, in `#desktop`) is the area between the top
+  bar and the Dock, inside the safe areas. Compact mode (phones,
+  `KW.config.mobile`, and viewports below 640 px, `COMPACT_PX` in
+  Workspace.tsx): every window is drawn maximized with a slim strip for
+  its title, only the top one shows, and the Dock is the switcher; the
+  geometry is kept for when the viewport widens.
+- Snapping (`wmsnap.ts`): a window dragged by its title bar to the
+  workspace's sides or corners tiles to a half or a quarter (to the top
+  edge: maximized), with a preview under it (SnapPreview.tsx); Ctrl-A and
+  an arrow does the same from the keyboard. A window's own geometry is
+  kept apart from its tile, so Restore, a drag out and the keys go back
+  to it, and tiles follow the workspace's size. Not in compact mode.
+- Effects (`wmfx.ts`): macOS-like open, close, maximize and a genie-like
+  minimize into the window's Dock tile, transforms and opacity only (the
+  Web Animations API on the window's element, so its content rides one
+  composited layer unpainted). The WM's state changes at once; a closed
+  window's ghost is drawn until its effect ends. Off with
+  prefers-reduced-motion, in compact mode, during a move or resize, in a
+  hidden tab and for the first render's windows.
+- Terminal windows (`termtabs.ts`, `terminals.ts`): a Terminal window (id
+  `terminal-K`, Dock tile `#dock-terminal-K`) holds an ordered set of
+  tabs, one per terminal (`#term-tab-N` in its title bar,
+  TerminalTabs.tsx), and a terminal is a tab of exactly one window. The
+  console's window (`terminal-1`) is opened by Workspace.tsx when it
+  loads, with `#term` in it, and never goes: its tab cannot be closed or
+  moved, and it has no close button or Close Window entry (only minimize). Any
+  other window goes with its last tab. A new terminal (Ctrl-A n, the tab
+  strip's +) goes into the Terminal window that last had the focus;
+  Ctrl-A N, or a right click, Shift-click or long press on +, into a new
+  one. A Terminal window whose only tab is a terminal app's terminal is
+  shown as that app (its icon and title on the Dock and the top bar).
+- Dock (`Dock.tsx`, whose header lists its ids): the launcher
+  (`#dock-launcher`), the pinned apps and groups (`#dock-group-<id>`,
+  `#dock-settings`; a pinned tile has its window's id where it stands for
+  one, `#dock-terminal-1` for Terminal, else `#dock-app-<id>`), then a
+  tile per other open window (`#dock-terminal-K`, `#dock-display`,
+  `#dock-preview`, ...), and while wland's relay is connected
+  `#dock-wayland` (Ctrl-A w). Pins (`pins.ts`): localStorage `kw.pins`, an
+  ordered list of app ids and `group:<id>` (by default Terminal, the Browsers,
+  AI, Desktop, Graphics and Games groups, and Settings), changed from the
+  tiles' and the launcher's menus (Keep in Dock, Remove from Dock, Move
+  Left, Move Right); an entry the registry no longer has is kept but not
+  shown. A pinned app's tile stands for its window (`appwindows.ts`
+  `windowApp()`: a page app's own window, a terminal app's Terminal or
+  Wayland window, its installer), which then has no tile of its own; a
+  pinned group's tile opens its apps in a stack above it (DockStack.tsx,
+  `#dock-stack`: a macOS Grid stack, the group's title over its apps on
+  a panel of the Dock's glass with a notch pointing at the tile, growing
+  out of it). A mouse resting on a group's tile (within 5 px) for 500 ms
+  opens its stack without moving the focus, and with one open, resting on
+  another group's tile for 130 ms switches to it (500 ms on the way from a
+  tile to its stack); it closes 300 ms after the pointer has left the tile
+  and the stack (`OPEN_DELAY`, `SWITCH_DELAY`, `GRACE` in Dock.tsx). A click opens
+  it pinned (or pins a hovered one) until a click on the tile, a press
+  elsewhere or Esc; a tap (touch, a pen) and Enter or Space toggle it as a
+  click does, the keyboard's putting the focus in it. A tile's menu or the
+  launcher closes it (Dock.tsx's header has the rules). Tiles magnify under
+  a mouse and show a label above them at once (`#dock-label`: the name,
+  the state, the key; no native tooltip; a group's tile shows its stack
+  instead), a running dot (busy faint, error red) and an install's bar. A
+  click shows a window, or minimizes the focused one (not in compact
+  mode); a right click, a long press or Shift-F10 opens the tile's menu
+  (`winmenu.tsx` `windowItems()`, the same items as the top bar's app
+  menu). The tiles scroll sideways when they do not fit.
+- Top bar (`TopBar.tsx`, `#topbar`): no background over the wallpaper, a
+  blurred tint over a window. The current app, one control (its icon, as
+  on its Dock tile, the focused window's `meta` title, then its own title
+  in a quieter tone; unkernel's mark and "Desktop" with none), a menu of
+  the window's items (`#tb-app`), and in its place until user space prints the
+  boot indicator (BootIndicator.tsx, `#tb-boot`: a ring with the boot's
+  progress and the step, red with the failure's title, a press opens
+  System); on the right Errors (`#tb-errors`) while there are any, the
+  resource meters (`#tb-cpu`, `#tb-mem`, from sm up `#tb-disk`, `#tb-net`,
+  and `#tb-gpu` while guest GL's or guest Vulkan's renderer is loaded: its
+  bar the share of the page's time the two renderers took together, its
+  tooltip each one's figures), which open
+  Resources, and the Control Center's item (`#tb-status`,
+  `#tb-status-label`). The bar always shows:
+  its auto-hide over a maximized window is off (`auto` in TopBar.tsx; the
+  code for it stays).
+- Control Center (`ControlCenter.tsx`, `#tb-cc`), opened by hovering or
+  clicking `#tb-status`:
+  the state and the uptime, quick buttons for what applies at once (full
+  screen, the next random wallpaper, the Display window), Settings…, System…
+  (`#tb-cc-system`), the kernel log, the shortcuts and About, and the
+  power items (`#tb-suspend` or
+  `#tb-resume`, `#tb-reboot`: "Reboot to apply" while Settings' options
+  differ from this boot's, and it asks first; Leave safe mode in safe
+  mode). Boot options stay in Settings.
+- Resources popover (`ControlCenter.tsx`, `#tb-res`), opened by hovering
+  or clicking a meter (that resource's row marked), under the last meter:
+  every resource's sparkline and facts (`Glance.tsx`; `#tb-gpu` marks both
+  GPU rows, GPU for guest GL and Vulkan), then System…
+  (`#tb-res-system`). One of the two popovers is open at a time.
+- Resources (`stats.ts`): one sampler for the meters, the Resources
+  popover and System's Overview, never two reads at once: a `vm.exec()` of a POSIX
+  sh snippet of builtins only (no program started, nothing read from the
+  image) that prints the guest's `/proc` (every few samples also `df`),
+  with the SDK's host counters, guest GL's (`vm.gl`) and guest Vulkan's
+  (`vm.vk`: status and stats, read only, never `load()`; without `vm.vk`,
+  the option off or no WebGPU, no Vulkan row or panel, as for GL; before
+  the guest's first VkInstance its state, "not loaded"). Vulkan's rates
+  per sample: presents (all, and by external buffer: zero-copy; the rest
+  read back), draws, dispatches, submits, bytes to the GPU and read back,
+  and the renderer's share of the page's time (its parse, translate and
+  encode ms); a new renderer after a device loss gives no rates across it.
+  Its errors and device losses show in red. A light sample every 5 s
+  for the meters, a full one every 2 s while the Resources popover or the
+  Overview shows; only while the page is visible and the machine runs; the
+  last 90 samples kept for the charts.
+- Shortcuts HUD (`KeysHud.tsx`): 180 ms after the prefix is armed, a
+  drawn keyboard with every bound key lit (its word and its group's
+  colour; a click runs it through `keys.ts` `runKey()`), a list on compact
+  screens; it takes no focus and no keys. While the prefix is armed the
+  Dock, the top bar and the tabs show each control's key (KeyHint.tsx).
+- Console auto-hide (`autohide.ts`, described at its top): once per load,
+  3 s after the console went quiet following user space's first output,
+  the console's window minimizes itself into its Dock tile, so the desktop
+  is what the page rests on. Only when that window is as it opened
+  (focused, not maximized, snapped or minimized, the console its only tab,
+  no other window shown), outside compact mode, with the system running
+  and nothing up (launcher, question, prefix, display program, an error
+  about the machine); any input on the page before then cancels it, and a
+  notice on the console, the machine stopping, safe mode or the base shell
+  bring it back. Not on a resumed session. Off with `?autohide=0`,
+  Settings > Desktop's "Hide the console after boot" (localStorage
+  `kw.hideConsole`, default on), in a browser driven by automation
+  (`navigator.webdriver`: the browser tests drive the console),
+  `?showcase`, `?verbose=1`, safe mode and `?distro=none`; `?autohide=1`
+  turns it on despite the toggle and automation.
+- Settings and System (`sysapps.ts`): one window each, their content
+  (Settings.tsx, SystemInfo.tsx, in AppShell.tsx's frame: a sidebar of
+  sections, or segments on narrow windows, as ARIA tabs) rendered once for
+  the page's life through a portal, into the window's body while it is
+  open and the hidden `#apps-parked` while not, so their ids (`#opt-*`,
+  `#data-status`, `#copy-area`, `#reboot`...) are always in the document.
+  Settings: Machine, Distro, Storage (the data disk and its actions),
+  Network (Wisp, the preview), Display and sound (and the font size),
+  Desktop (DesktopSettings.tsx), Session, Keyboard, About; its footer
+  says what changed and has Suspend (`#suspend`, Resume once suspended)
+  and Reboot (`#reboot`). System: Overview (a resource monitor: the
+  state, CPU, memory, disk, network, GPU with guest GL, Vulkan with guest
+  Vulkan, the emulator, the
+  busiest processes, the boot timeline with `#stages`, the machine's
+  facts; Overview.tsx), Environment (the checks), Kernel log, Errors; its
+  footer Copy diagnostics (`#copy`). Each section has a short name (the
+  store's `Tab`: boot, distro, storage, ..., about; System's status, env,
+  log, errors; guest is an alias of storage), which `openSection()`, the
+  tabs' `data-tab` and the tests use.
+- Wallpaper (`desktop.ts`, Wallpaper.tsx, Settings > Desktop): kept in
+  localStorage `kw.desktop`, applied at once. The default is Random: a
+  photo from Lorem Picsum (`picsum.photos`: Unsplash photos, no key, sent
+  with CORS, so they load under COEP require-corp) on every load. With
+  Random or a chosen photo the page contacts picsum.photos on every load;
+  with the built-in wallpaper (style.css: a gradient and the mark) or a
+  CSS preset only while Settings > Desktop shows its thumbnails. Requests
+  carry no credentials and no referrer. The photo shown last is kept in
+  the Cache API (`kw-wallpaper-v1`) as the next load's placeholder, and
+  `kw.wallpaper-hint` lets index.html paint it first. The luma of its top
+  band, under the top bar, sets `data-wallpaper` (light or dark) for the
+  chrome. Photos have Dim and Blur and a credit in the workspace's bottom
+  right.
+- The bare desktop's menu (`DesktopMenu.tsx`, a right click or a long
+  press on `#desktop` or `#workspace` itself): New Terminal, Settings…,
+  System…, Change Wallpaper…, Apps….
 
 ## Guest GL
 
-The Guest GL option (`?gl=`, the `#opt-gl` box in Options; on by default
-on Debian where the display is: `?gl=0` turns it off, `?display=0` too
+The Guest GL option (`?gl=`, the `#opt-gl` box in Settings' Display and
+sound; on by default on Debian where the display is: `?gl=0` turns it off, `?display=0` too
 unless `?gl=1`; config.ts `glDefault()`, saved only where it differs)
 boots with the SDK's `createKernel({ gl: true, gpu: true })` (js.md, Guest
 GL, virtio-gpu 3D; gl.md, The DRM path): the guest's Mesa renders through
@@ -462,7 +737,7 @@ out, so the guest has the vtest link alone, for comparison.
   `WebGL2RenderingContext`. Otherwise the box is unticked and disabled with
   the reason in its note (it follows the Distro radios as chosen), its
   saved value kept; a load that cannot have it boots without and says why
-  in the Environment tab's Guest GL row (`cfg.glWhy`: a warning where the
+  in the Guest GL row of System's Environment (`cfg.glWhy`: a warning where the
   option was set, `cfg.glAsked`, information where it is the default,
   as on Alpine).
 - With GL on the page appends `kw.gl=1` to the command line;
@@ -536,7 +811,7 @@ out, so the guest has the vtest link alone, for comparison.
   Xorg :0 -config kw-kms.conf -nolisten tcp &`, then `DISPLAY=:0
   glxgears`; after the page resized, `xrandr; xrandr --output Virtual-1
   --auto` (x11-xserver-utils; X hears no hotplug without udev; the X +
-  glamor tile's start.sh follows by itself: gl.md, Display size). Without the device (`?gpu=0`) X runs on kwfb (kernel/guest.md,
+  glamor app's start.sh, `apps/xkms.ts`, follows by itself: gl.md, Display size). Without the device (`?gpu=0`) X runs on kwfb (kernel/guest.md,
   X.Org on the framebuffer: `xserver-xorg-video-fbdev`, `sudo Xorg :0
   -nolisten tcp &`) and GL clients on it go through the vtest link,
   reading each frame back; for frame rates without the display,
@@ -556,18 +831,286 @@ out, so the guest has the vtest link alone, for comparison.
   data disk, the built server's
   `/assets/virgl-*/` files in a browser.
 
+## Guest Vulkan
+
+The Guest Vulkan option (`?vk=`, the `#opt-vk` box in Settings' Display
+and sound, under Guest GL; on by default, saved only as `vk=0`) boots with
+the SDK's `createKernel({ vk: true })` (vk.md): the base's ICD
+(`/usr/lib/kw/libvulkan_kw.so`) talks over vsock port 1018 to a renderer on
+the page thread's WebGPU, in worker mode too. Nothing of it (the
+renderer's chunks and `kwvk-naga.wasm`) is fetched before the guest's
+first VkInstance. Vulkan windows on the Wayland desktop come as external
+buffers where the guest's relay has them (Wayland desktop, Vulkan apps by
+external buffer), else as wl_shm windows (frames read back).
+
+- Only on Debian (`VK_DISTROS`, config.ts) and where `vkBlocker()` passes:
+  the page's build has the translator (`vkShaderUrl`) and the page's
+  thread has `navigator.gpu`. Otherwise the box is unticked and disabled
+  with the reason, and System's Environment row says why (`cfg.vkWhy`; a
+  warning where the option was set). A browser with `navigator.gpu` but
+  no adapter (`vkAdapterBlocker()`: `requestAdapter()` gives none, e.g.
+  Chrome on Linux without its WebGPU flags; asked once at boot, no device
+  made) boots without guest Vulkan the same way: the row and the option's
+  note say why and the launcher's Vulkan apps are disabled. Sessions record nothing of it: the
+  command line is the same, and the renderer is not in snapshots (a resume
+  resets the guest's Vulkan links).
+- The translator is picked like the GL renderer (`withVk()` in
+  `web/scripts/kernel.ts`): `KW_VK=<dir>` (`KW_VK=0`: none), else with a
+  local kernel `vendor/build/vk/kwvk-naga.wasm` (`vk/naga/build.sh`), else
+  the release's `kwvk-naga.wasm` asset (the release workflow builds and
+  attaches it; `release.json`'s `vk`). The dev server answers
+  `/_vk/kwvk-naga.wasm` (`serveGl()`), a build emits
+  `/assets/kwvk-naga-<16 hex digits of its sha256>.wasm`;
+  `virtual:unkernel-kernel`'s `vkShaderUrl`, which `src/sdk.ts` passes to
+  `webPlatform()` with the renderer's modules. The build log's `Vulkan
+  translator:` line says which.
+- `showVk()` (boot.ts): "on, not loaded yet" (`vm.vk.status` idle),
+  "loading", then the WebGPU adapter (`status.adapter`), the load time and
+  from `vm.vk.stats` the instances now and in all and, from the current
+  renderer's counters (`stats.renderer`) over the last 2 s, frames
+  presented a second and draws a frame, its totals, and its errors where
+  there are any (a warning row), every 2 s while they change; a software
+  adapter (SwiftShader) is a warning row; a lost WebGPU device (status
+  "lost", `stats.losses`) a warning row "WebGPU device lost" (the running
+  programs must be restarted, the next one gets a new device); a failed
+  load a failed row and a toast. Once wland has a link the row also says
+  how Vulkan windows reach the page (`KW.wayland.externalBuffers()`):
+  "zero-copy presentation" with the external commits, pictures and the
+  renderer's `externalPresents`, or "by readback into wl_shm" and why.
+- The vkcube app (`apps/gl/vkcube.ts`, Graphics folder; `needs.vk`):
+  `libvulkan1 vulkan-tools`, then `vulkaninfo --summary` and `vkcube --wsi
+  wayland` on the Wayland desktop. The vkmark app (`apps/gl/vkmark.ts`):
+  `vkmark --winsys wayland`. GTK on Vulkan (`apps/gl/gtkvk.ts`):
+  `gtk-4-examples`, `GSK_RENDERER=vulkan gtk4-demo`.
+- D3D12 gears and D3D12 triangle (`apps/gl/d3d12gears.ts`, described at
+  its top, and `d3d12triangle.ts`; Graphics folder, `needs.vk`): vkd3d's
+  Direct3D 12 demos, native Linux programs on D3D12 without Wine (vkd3d
+  turns D3D12 into Vulkan, kwvk Vulkan into WebGPU). Debian's
+  `vkd3d-demos` (vkd3d 1.2: `/usr/bin/vkd3d-gears`, `vkd3d-triangle`;
+  with libvkd3d1, libvkd3d-shader1 and libvkd3d-utils1 about 230 kB to
+  download, 880 KiB installed) and the Xwayland packages (`xwl.ts`): the
+  demos are xcb only, so each runs on a rootful Xwayland of its window's
+  size (300x300, 640x480) with no window manager (`XWL_NO_WM=1`), its
+  frames read back and put with XPutImage (vk.md, Presentation). The
+  gears' X screen is black (`gears.sh`), since the page's window for it
+  is 320 wide. vkd3d makes four pipelines at start-up that WebGPU cannot
+  run (texel buffers, 1D-array storage images) and the demos never bind:
+  kwvk prints a "cannot run on WebGPU" line for each, and the row counts
+  them as renderer errors; the README they print first says these are
+  expected. Esc quits either, and X with it. Clicked on the dev server on
+  2026-11-24 (headless Chromium, SwiftShader, one CPU): on the default
+  disk the installer put in vkd3d-demos and the Xwayland packages over
+  the page's network and the gears drew about 2 min after the click
+  (95 s with vkd3d-demos already on the apps disk), at 28-35 frames a
+  second by the row, 6 draws a frame; the triangle's window then came
+  within seconds of its click (it presents a few frames, then waits for
+  events: no frame rate in the row); both pictures as on lavapipe, no
+  device lost.
+- The llama.cpp app (`apps/agents/llama.ts`, in the AI folder, described at its top; a Terminal
+  window of its own): a language model with every layer on kwvk. The
+  installer puts in `libvulkan1 vulkan-tools libgomp1 libssl3t64 curl
+  ca-certificates` and fetches the model, stories260K (F32, 1.1 MiB, from
+  Hugging Face, which sends CORS headers; `downloads`) into
+  `~/.apps/llama/models/`. Its `llama.sh` checks that `vulkaninfo
+  --summary` names kwvk, fetches llama.cpp's own release build (Ubuntu,
+  arm64, Vulkan; pinned tag and SHA-256, 29 MiB, 77 MiB unpacked into
+  `~/.local/share/llama.cpp/<tag>`) itself over https on its first run,
+  since github.com sends no CORS headers (Debian 13 has no llama.cpp), and
+  runs `llama-completion -ngl 99`: stories without end until Ctrl-C (no
+  token limit, the context shifted when full, end-of-text ignored; the
+  model has no chat template), `TURNS=1` a story the user continues a
+  turn at a time, and a model with a template chats.
+  `MODEL=stories15M|PATH|URL` picks another GGUF; quantized ones abort for
+  now (vk.md, Unsupported), and wider F32 ones on software WebGPU. Only
+  llama's errors and timings reach the terminal (the rest is in
+  `llama.log`), and a refused shader or a lost device gets a one-line
+  hint. Nothing to deploy for it: both downloads come from their
+  upstreams, but the release build's shaders need the translator's
+  member-decoration rule (vk.md, Translator), so a page whose
+  `kwvk-naga.wasm` predates it loses the device at llama's first submit.
+  Driven by a scratch harness on 2026-11-24 (the tile clicked on the dev
+  server, headless Chromium on SwiftShader, one CPU, the prepared disk):
+  the installer about 1 s (the model; the packages were on the disk), the
+  llama.cpp fetch and unpack about 9 s, the first story under 40 s after
+  the click; eval 5.1-6.9 tokens/s, prompt 1.1-1.3 (its first batches
+  wait for pipelines); a later launch's text after 8-10 s at 5.2-6.1
+  tokens/s;
+  `MODEL=stories15M` aborted with the hint (rms_norm_mul_f32_512).
+- The Ollama app (`apps/agents/ollama.ts`, in the AI folder after
+  llama.cpp, described at its top; a Terminal window of its own) runs
+  Ollama's server and `ollama run` on kwvk. Ollama 0.40 runs models in
+  llama.cpp's llama-server, so its GPU path is ggml-vulkan, as in the
+  llama.cpp app. The installer adds `zstd` to llama.cpp's packages and
+  fetches the same stories260K into `~/.apps/ollama/models/`. On its first
+  run `ollama.sh` checks kwvk as `llama.sh` does, then fetches over https,
+  pinned by tag and SHA-256:
+  - Ollama's `bin/ollama` (with its Go code's `GO_LICENSE`), from the first
+    12 MiB of Ollama's linux-arm64 archive by an HTTP range. The archive is
+    1.6 GiB, mostly CUDA, and has no Vulkan backend (Ollama builds that for
+    amd64 only).
+  - llama-server, libllama and ggml, from llama.cpp's Ubuntu arm64 Vulkan
+    build of the tag that Ollama pins (b12651).
+
+  Both go into `~/.local/share/ollama/<version>` (97 MiB; the Vulkan
+  backend in `lib/ollama/vulkan/`). The script then starts `ollama serve`
+  in its own session (log in `ollama.log`) with these settings:
+  - `OLLAMA_IGPU_ENABLE=1`: Ollama drops integrated GPUs, and kwvk is one.
+  - `LLAMA_ARG_FIT_TARGET=64`: llama-server's `-fit` keeps 1 GiB of device
+    memory free, more than kwvk's heap was (half the guest's RAM then; 4 GiB of device-only memory now), and would
+    otherwise put every layer on the CPU.
+  - `OLLAMA_NO_CLOUD=1` and `OLLAMA_KEEP_ALIVE=-1`.
+
+  It stops with a message unless three checks pass: Ollama's "inference
+  compute" line names kwvk, a Vulkan0 model buffer exists after `ollama
+  create` (F32 kept) and a load, and llama-server reports offloaded
+  layers. Its "On kwvk" line gives the load time (the load request: the
+  weights read and uploaded, the first pipelines made), and `ollama run
+  --verbose` ends each reply with Ollama's timings (eval rate: tokens per
+  second), the numbers to compare GPUs and builds by. On a terminal ollama.sh asks which model (a numbered list; Enter takes
+  the first, SmolLM2 135M, which is also the default without a terminal;
+  `MODEL=` skips the question); a model with a chat template gets `ollama
+  run`'s chat. `THINK=0` runs a thinking model without its reasoning,
+  `TEMP=N` serves a derived model with that temperature, a model that does
+  not fit the data disk is refused before its download, and the server is
+  started again when Ollama's GPU discovery (30 s) times out on a cold
+  start. Short names: `smollm2` (served as `smollm2-tools`: a ChatML
+  template with a tool section), `qwen`, `qwen-coder`, `qwen1.5` (Qwen2.5
+  1.5B, 2950 MiB), `llama3.2` (1B, 2364 MiB), `qwen3.5` (0.8B, BF16),
+  `stories260K`. Models:
+  - `MODEL=stories260K`, the story model, runs on software WebGPU too: the
+    script writes a story from "Once upon a time" and reads the user's
+    story starts, sending each as `ollama run --verbose stories260k
+    "TEXT"` (Ollama's generate path), not through `ollama run`'s own
+    prompt, which chats through llama-server's chat endpoint with a
+    template this model does not know.
+  - `MODEL=smollm2` (SmolLM2 135M Instruct, F16, 271 MiB) and the default
+    are small coding models for a real GPU. On SwiftShader both abort at
+    rms_norm_mul_f32_512 (512-wide workgroups) with the hint; on the
+    user's GPU SmolLM2 loaded and answered (2026-11-24). Of the two, only
+    Qwen2.5-Coder's template has tools (`ollama show`).
+  - `MODEL=[user/]name[:tag]` takes any model of Ollama's registry.
+  - `MODEL=PATH.gguf` takes another GGUF. Quantized models abort for now.
+
+  `ollama pull` cannot work in the guest. It refuses redirects to hosts
+  that resolve to non-public addresses, and the page's network answers DNS
+  with synthetic ones (198.18.0.0/15). So the script fetches registry
+  models with curl instead, into Ollama's store as a pull would:
+  - The manifest goes byte for byte to
+    `manifests/registry.ollama.ai/<namespace>/<name>/<tag>`, a path the
+    server reads on each request, so it needs no restart.
+  - Each blob goes to `blobs/sha256-<hex>`, checked against its digest and
+    resumable.
+
+  The script's exit status says why it stopped: 3 a download failed, 4
+  guest Vulkan refused a shader, 5 the WebGPU device was lost, 1 anything
+  else.
+
+  `SERVE=1` runs the server only, for other apps. Once the model is on
+  kwvk, the script writes its Ollama name to `ollama.ready` and waits;
+  Ctrl-C or a TERM stops the server and removes the file. The script never
+  sets `OLLAMA_CONTEXT_LENGTH`, so the server inherits it from the caller.
+  `ollama.ts` exports `OLLAMA_MODEL`, `OLLAMA_MODEL_CTX` and
+  `OLLAMA_MODEL_TOOLS` (stories260k, 2048, false).
+
+  When the script ends it stops the server. A refused shader or a lost
+  device gets a hint like llama.sh's. Nothing needs deploying: all
+  downloads come from their upstreams. Driven by a scratch harness on
+  2026-11-24 (the tile clicked on a dev server of its own, headless
+  Chromium on SwiftShader, one CPU, 1 GiB, the prepared disk):
+  - The installer took 2 s (the model); the two fetches and unpacking 24 s.
+  - The server answered 3 s later. The model was on kwvk ("offloaded 6/6
+    layers to GPU", `ollama ps` "100% GPU") 44 s after the click.
+  - The first story's eval ran at 2.7-4.8 tokens/s. A typed story start
+    ("The little dragon": 8 prompt tokens) ran at 5.1 tokens/s.
+  - Ctrl-D ended it with no ollama or llama-server left.
+- The fx (local model) app (`apps/agents/fx-local.ts`, in the AI folder
+  after fx, described at its top; a Terminal window of its own) runs fx
+  against the Ollama app's server as fx's custom connection `local`. It
+  repeats nothing of Ollama: it writes the Ollama app's files and
+  downloads into `~/.apps/ollama` (shared models, log and `ollama.pid`, so
+  one server at a time), installs its packages plus `jq`, and its
+  `fx-local.sh` runs `SERVE=1 ./ollama.sh` there in the background with
+  `OLLAMA_CONTEXT_LENGTH=CTX`, waits for `ollama.ready`, and stops it when
+  fx quits. The connection (protocol `openai-chat-completions`,
+  `http://127.0.0.1:11434/v1`, auth none, long `timeouts`, and
+  `model_metadata` with `context_window`, `max_output_tokens`,
+  `supports_tool_use` and `supports_vision`) is merged with jq into an
+  app-private `FX_HOME` (`~/.apps/fx-local/fx-home/settings.json`), so the
+  user's `~/.fx` is untouched; fx runs with `FX_PROVIDER=local`,
+  `FX_MODEL` and `FX_AUTO_UPGRADE=0` in `~/.apps/fx-local/work`. fx-local.sh
+  asks which model on a terminal as ollama.sh does, runs it at temperature
+  0 (`TEMP=`) and a thinking model with `reasoning_effort: "none"` in the
+  connection's per-model request fields (`THINK=1` for thinking; untested
+  in fx). The
+  first and default model is `MODEL=qwen` (Qwen2.5 0.5B Instruct,
+  `qwen2.5:0.5b-instruct-fp16`: the smallest one ollama.sh offers that
+  calls fx's tools; CTX 16384; guest memory 3 GiB or more). Qwen2.5-Coder
+  0.5B (`MODEL=qwen-coder`, the same size) answered fx with JSON in a code
+  block instead of tool calls (3 tasks of 3; Qwen2.5 0.5B called tools in
+  2; host CPU, 2026-11-24). fx sends
+  its tools with every request whatever `supports_tool_use` says, and
+  Ollama answers HTTP 400 for a model without them (SmolLM2, the story
+  model), so fx-local.sh stops before fx with such a model. The
+  `context_window` never exceeds the trained context that Ollama's
+  `/api/show` reports, and tool use follows its capabilities
+  (`OLLAMA_MODEL_TOOLS` for the story model; `TOOLS=0|1` overrides). On
+  a real GPU (the user's, 2026-11-24) SmolLM2 loaded and fx reached it
+  (and got that 400); Qwen2.5 with fx on a GPU is untried. The field names
+  follow fx's docs for 0.0.17.
+- The page needs a base bundle with the ICD (vk.md). `test/vk/page-check.mjs`:
+  the dev server on a free port with `KW_KERNEL=$KW_BUILD/vk/base/unkernel.wasm`
+  where it exists (`--kernel FILE`; `--built`: web/.output, whose kernel
+  the build took), the Playwright Chromium with the WebGPU flags (vk.md,
+  Testing), the prepared disk `$KW_BUILD/vk/debian-vk.img` imported (as the
+  `.kwsparse.gz` next to it, made once; `--fresh`: apt instead), the
+  default URL; checks the option on by default with the renderer idle and
+  nothing fetched, `vulkaninfo --summary` naming kwvk, the row naming the
+  adapter, the vkcube tile's window and its pixels and the row's frame
+  rate, how vkcube's frames came (external buffers with no byte read back
+  where the guest's relay has `--external-buffers`, `--relay FILE`
+  pushing an aarch64 wlandr over the image's and restarting the boot's
+  relay; else readback), then the vkmark and GTK on Vulkan tiles' windows where the disk
+  has them (`--disk $KW_BUILD/vk/debian-vk-apps.img`, debian-disk.mjs
+  --apps; `--no-vkmark`, `--no-gtk`), then the D3D12 gears and triangle
+  tiles' Xwayland windows where the disk has vkd3d-demos or with
+  `--vkd3d` (their installer then installs it over the page's network;
+  `--no-vkd3d`): pixels, the gears' change between two screenshots 1 s
+  apart, the row's frame rate printed (`--no-tile`, `--inline`,
+  `--shots DIR`). A reload of the page during the checks (the
+  dev server reloads it when a source in the tree changes, which ends the
+  VM) makes the run "could not run" (exit 2), not a failure.
+- Checked 2026-11-24 with `test/vk/page-check.mjs`, one CPU, a base built
+  with the ICD (Vulkan 1.2; `KW_BASE_OUT` and `kernel/tools/bundle.mjs`,
+  with the SMP patch): worker mode and `--inline` with `--disk
+  debian-vk-apps.img` pass (vulkaninfo apiVersion 1.2.314; the translator
+  loaded in about 30 ms on "google swiftshader"; vkcube 500x500 at 34-45
+  frames a second by the row, 1 draw a frame; vkmark's window 800x600 and
+  gtk4-demo's 828x598 with GTK's Vulkan renderer drawing, non-blank); and
+  `--built` (that base as the local bundle, the default disk). Two earlier
+  `--inline` failures came from the dev server reloading the page for
+  another session's edit of `js/core/vk-host.ts`. The built server sends
+  the translator as `application/wasm`, br-compressed, immutable. Also
+  2026-11-24, the default disk, the image's relay (wland
+  0.1.0-261124-3c987e5): worker mode and `--inline`, vkcube by external
+  buffers (every present an external commit resolved to a picture, 0 bytes
+  read back; resolve 0.13 ms; 32 frames a second by the row); with a relay
+  without external buffers, by readback (1 MB a frame).
+
 ## Wayland desktop
 
 Wayland apps in the guest show as windows on the page, through
 [wland](https://github.com/pithings/wland) (npm `wland`, pinned exactly
-in `web/package.json`; `src/wayland.ts`, `components/Desktop.tsx`): its
+in `web/package.json`; `src/wayland.ts`, `src/wayland/`,
+`components/WaylandOutput.tsx`): its
 compositor (wasm) runs on the page's thread, its relay in the guest. The
 page boots with `createKernel({ shm: true })` (kwshm; js.md, shm) and
 `kw.wayland=1` on the command line (with kwshm only, as `kw.gl=1` with
 GL; a resume keeps the saved kernel's command line) and, once the kernel
 runs, listens on vsock port 1023 (`WAYLAND_PORT`). Wayland is always
-there in the guest (with a relay that has `--link-on-demand`: wland after
-the pinned release, below): with `kw.wayland=1` the kw layer's rc starts the relay
+there in a Debian guest (its image carries the relay, kernel/guest.md;
+Alpine and the base shell have none, so nothing starts and `wland` says
+why; with a relay that has `--link-on-demand`: wland after the pinned
+release, below): with `kw.wayland=1` the kw layer's rc starts the relay
 `/usr/lib/kw/wlandr --link vsock:2:1023 --buffers kwshm --link-on-demand`
 for the image's user (with `--dmabuf virtgpu:/dev/dri/renderD128
 --no-fence-wait` where guest GL's render node is: GL apps, below), which
@@ -597,7 +1140,11 @@ answered at the kernel's next yield.
   imports wland (its own chunk) and `wland.wasm` (passed by URL:
   `wland/wland.wasm?url`, since the dev server's dep optimizer breaks the
   package's own `import.meta.url` lookup); a page that never runs a
-  Wayland app fetches neither. The relay's next connection after a drop
+  Wayland app fetches neither. After a change of wland's version restart
+  the dev server: its pre-bundled `wland/client` otherwise stays the old
+  one next to the new `wland.wasm`, wland fails to load with a LinkError
+  and every Wayland client is refused (the reason is only in the Kernel
+  log). The relay's next connection after a drop
   goes to the same wland (a fresh compositor; the apps of the old link are
   gone). The relay counts a completed connect as the compositor attached
   and the SDK's listener completes every connect, so the page takes a
@@ -625,37 +1172,116 @@ answered at the kernel's next yield.
   (ConnectionRefused)`; foot prints `no compositor` and `failed to flush
   wayland socket` (exit 230), and `wland CMD` adds that the page did not
   take the link.
-- The view: a layer over the stage (`#wl-layer`, z-11, over the display,
-  under the preview) with wland's container `#wl-desktop`, the stage's
-  size (the output size the apps get), always mounted and only hidden
-  (`invisible`, `inert`). The store's `desktop` state: `attached` while
-  the relay is connected, which shows the status line's desktop icon
-  (`#bar-desktop`, overlapping windows, its tooltip lists the windows);
-  `shown` when the first window maps and hidden when the last one goes,
-  or by hand: the icon, Ctrl-A w (`toggleDesktop()`); picking a terminal
-  window or the display hides it. wland does its own input: a click
-  focuses a window, whose keys go to wland's hidden editable sink, which
-  display.ts and the terminals leave alone (display.ts takes no keys while
-  the desktop is shown); the page's shortcuts (Ctrl-A) still come first,
-  and Ctrl-A Ctrl-A sends Ctrl-A on to the app. Hiding the desktop gives
-  the terminal the keyboard if a window had it (not on touch devices);
-  showing it gives the top window the keyboard once the layer has rendered
-  (`focusDesktop()` from Desktop.tsx: an inert layer takes no focus).
-  Windows have the apps' own title bars (wland draws no decorations);
-  wland's window manager: Alt+drag moves, Alt+F9/F10/F11 minimize,
-  maximize, fullscreen (to the desktop's size, which follows the stage:
-  wland's output follows its container's size, so `wl.output` is not
-  used).
-  The clipboard works between the apps (wl-copy, foot, GTK), and wland's
+- Windows (`wayland/host.ts`, described at its top): each toplevel is a
+  window of the page's window manager (wm.ts, `wl-<key>`, in the z-order
+  the terminals and the other windows share), wland's window element (its
+  canvases) at the window's body's origin. createWland runs as an
+  embedder's window manager wants it: `decorations: 'server'`,
+  `autoFocus: false`, `manageDisplay: false`, and the `mount`, `unmount`
+  and `interactive` hooks. wland answers xdg-decoration with server-side:
+  apps that ask (foot; SDL, through libdecor) are `decorated` and get the
+  page's frame (frame "normal": the title bar with minimize, maximize and
+  close), the others (GTK) draw their own title bars (frame "none": no
+  border, background or shadow, style.css); a change after the window
+  maps (the `decoration` event) adds or drops the frame, the element
+  keeping its size. Nothing clips a Wayland window, so the app's shadows
+  and popups reach past it. The WM owns the position and the z-order, the
+  app its size: the element's size (the window geometry wland applies)
+  is copied into the WM window, plus the frame, and a size the WM gives
+  it (an edge drag, the workspace shrinking) is asked of the app
+  (`requestResize`). Each such request's token is matched to the app's
+  ack of the configure it caused (or of a later one); until then the
+  sizes the app commits are not taken, so a stale answer never wins over
+  a newer request. Maximized, a window fills what `setBounds()` gave
+  wland: the workspace, less the title bar for a decorated window;
+  compact mode (wm.ts) configures every Wayland window maximized, and a
+  fullscreen app maximizes its WM window while it lasts.
+- Moves, resizes, tiles: xdg_toplevel.move and resize (a press on a GTK
+  app's own title bar or border) and Alt+drag reach the page through
+  `interactive` and become the WM's own move or resize, the pointer
+  grabbed from the apps meanwhile. wland's window manager keeps popup
+  grabs, drag and drop and Alt+F9/F10/F11 (minimize, maximize,
+  fullscreen), whose states the WM window mirrors (and the reverse:
+  minimize and maximize from the page reach the app). Snapped to a tile
+  (a drag to the workspace's edge, Ctrl-A and an arrow), the app is told
+  it is tiled on the tile's outer sides, with the tile's size
+  (`setTiled`; no edges once it leaves the tile), and the size it takes
+  is drawn against the tile's outer side and corner (`wm.fitTile`).
+  Where each element is in the workspace (wland's output) goes to wland
+  after each change of the WM (`setWindowPosition`), so popups (menus,
+  tooltips) near the output's edges flip or slide to stay on it.
+- Close: the title bar's button, Close Window in the Dock's and the top
+  bar's menus, and the compact strip's button send xdg_toplevel.close:
+  the app decides (it may ask first, or ignore it), and the WM window
+  goes when the toplevel unmaps.
+- Focus: the WM's focus is the authority (`autoFocus: false`). A Wayland
+  window focused (a press in it, its Dock tile, Ctrl-A w) is raised in
+  wland and gets its keyboard (`input.focus`: wland's hidden editable
+  sink); any other window focused takes it away (`input.blur`), so keys
+  typed in a terminal never reach an app and the reverse, and a press in
+  the focused Wayland window whose keyboard went (the page's focus taken
+  outside the windows) gives it back before the app sees the press. A
+  window maps focused unless it maps minimized. display.ts takes keys only
+  while the Display window has the WM's focus, and the terminals ignore
+  wland's elements (termtabs.ts); the page's shortcuts (Ctrl-A) still
+  come first, and Ctrl-A Ctrl-A sends Ctrl-A on to the app. Ctrl-A w and
+  the Dock's `#dock-wayland` (there while the relay is connected: the
+  store's `wayland.attached`) go to the top Wayland window (restoring the
+  top one when all are minimized), or, from a focused one, back to the
+  top other window (winmenu.tsx `toggleWayland()`). wland's container
+  `#wl-desktop` (`components/WaylandOutput.tsx`) covers the workspace,
+  over every window, and takes no pointer: the output the apps get (what
+  maximize and fullscreen fill), with the keyboard sink, drag icons and
+  the cursor image in it; `data-shown` while a Wayland window has the
+  focus.
+- Minimized and hidden: minimized follows both ways (the Dock, the title
+  bar, Alt+F9, the app). wland leaves the window elements displayed
+  (`manageDisplay: false`), so a minimized window flies into the Dock with
+  its last frame (wmfx.ts), and a window the WM does not show (minimized;
+  in compact mode, any but the top one) is not rendered for (`setVisible`,
+  from the WM window's `onVisible`).
+- What the Dock and the top bar show of a window: its tile
+  (`#dock-wl-<key>`) and the top bar's detail are labelled with the app's
+  title (else its launcher app's name, its app id, "Wayland window"). By
+  its app id (xdg_toplevel.set_app_id): a launcher app's (appwindows.ts
+  `waylandApp()`: the app's id or one of its `waylandIds`, any case, or
+  the last part of a reverse-DNS id; foot, thunar, chromium, the games)
+  gives the window that app's descriptor, so it is drawn as the app's
+  pinned tile (its running dot; a click shows it) or with its icon, and
+  gets Keep in Dock; any other app id gets the guest's own icon for it
+  (`wayland/icons.ts` `guestIcon()`, described at its top: the app id's
+  .desktop file and its `Icon=` in the hicolor and Adwaita themes or
+  `/usr/share/pixmaps`, one `vm.exec()` per app id, never while the
+  machine is held, only an SVG or PNG of at most 256 KiB, kept for the
+  page's life), the generic icon while it is read, the app id's letter
+  when the guest has none, the generic icon without an app id.
+- The clipboard works between the apps (wl-copy, foot, GTK), and wland's
   bridge (its `clipboard` option, left on) joins it to the page's for
-  plain text: a paste chord in the desktop (Ctrl+V, Ctrl+Shift+V,
-  Shift+Insert) gives the focused app the page clipboard's text (from the
-  browser's paste event), and an app's copy is written to the page
-  clipboard around a click or key in the desktop. On because it asks for
+  plain text: a paste chord while a Wayland window has the keyboard
+  (Ctrl+V, Ctrl+Shift+V, Shift+Insert) gives the focused app the page
+  clipboard's text (from the browser's paste event), and an app's copy is
+  written to the page clipboard around a click or key in a Wayland
+  window. On because it asks for
   no permission: it reads the page clipboard only from a paste event (or
   on focus where clipboard-read was granted already) and writes only
   around a gesture, so no browser prompts; a relay without the bridge
-  (0.1.0) turns it off for its link.
+  (0.1.0) turns it off for its link. Pasted HTML, images and files are
+  `wayland/paste.ts` (described at its top), which takes those paste
+  events before wland and sets the Wayland selection itself; host to
+  guest only. A page cannot put files on the host clipboard, so files
+  copied in an app show a toast that saves them through the browser
+  (`wayland/copyout.ts`; a folder or several as a .tar.gz), and their
+  paths are kept off the host clipboard (the bridge clears it instead).
+- Drags from the host (`drop.ts`, described at its top): files dropped on
+  an app go into the guest's `~/Downloads` (`upload.ts`; a name taken
+  gets " (2)") and reach it as text/uri-list, dragged text, HTML and
+  links as they are. createWland's own bridge is off (`dnd: false`): it
+  asks its container what is inside, and the apps' elements are not in
+  `#wl-desktop`. On a terminal whose shell is at its prompt they go into
+  the shell's directory instead (`promptDir()`); where a program runs,
+  it gets their quoted paths. A drop elsewhere on the page only copies.
+  Every other drop is cancelled, since the browser would open it over
+  the machine. Folders are not copied.
 - Sessions: kwshm is a device of the snapshot, so a session records it
   (`SessionDevices.shm`; absent in older ones: off) and resumes with its
   own (`adoptSessionGl()`); a fresh boot has it unless `?shm=0` (this
@@ -707,30 +1333,52 @@ answered at the kernel's next yield.
   compiles on SwiftShader); the window is right either way. An on-demand
   relay started without its render node warns (`linux-dmabuf off for
   now`) and looks the node up again at each dial (page-check `--gpu`).
+- **Vulkan apps by external buffer** (`gpuSource()`'s `resolveExternal`,
+  where `vm.vk` exists, unless `?wlgpu=0`): the guest's `wland` launcher
+  starts the relay with `--external-buffers` where its `--version` lists
+  `external-buffers` (the pinned release's relay does not: Vulkan windows
+  then come by readback), and wland then offers
+  `wland_external_buffer_manager_v1`; the kw ICD names each swapchain image
+  by an id instead of sending its pixels (vk.md, Presentation), and
+  `resolveExternal()` is `vm.vk.externalImage(ref)`: an ImageBitmap copied
+  from the image's GPUTexture on the Vulkan renderer's device, synchronous
+  (a promise would stall every window of the link), null for an id no
+  running program made (the window keeps its last content); `release`
+  closes it, for both kinds. `KW.wayland.externalBuffers()` is wland's
+  `engine.externalBuffers()`; `KW.wayland.stats()` counts `extCommits`,
+  `extImages`, `extMs`, `extMaxMs`, `extDrawMs`; the Guest Vulkan row says
+  which way Vulkan windows come. A relay started without the flag (an
+  older image, a resumed session's) keeps them on readback.
 - What Mesa picks (Debian 13, Mesa 25.0.7; 2026-11-22): EGL's Wayland
   platform on the `virtio_gpu` DRI driver, window configs in B8G8R8A8 and
   B8G8R8X8 only (no R8G8B8A8 one), so ARGB8888 with alpha and XRGB8888
   without, always with the LINEAR modifier (0), never y_invert, plane
-  offset 0, stride width x 4. GTK 4.18 draws with GskGLRenderer (no Vulkan
-  driver installed), which needed renderer patch 14 (gl.md, Patches).
+  offset 0, stride width x 4. GTK 4.18 draws with GskGLRenderer (its default;
+  `GSK_RENDERER=vulkan` uses guest Vulkan, vk.md), which needed renderer
+  patch 14 (gl.md, Patches).
 - One wland release on both sides: the npm version in `web/package.json`
-  and the relay's `WLANDR_VERSION` (guest/base/pins.sh) change together
-  (the link protocol is theirs). The page needs wland 0.1.0-261122 or
-  later (the `gpu` source, `view`, `readv`, the clipboard bridge); with
-  the first 0.1.0 package it still runs, wland ignoring what it does not
-  know (a read per span, no GL windows by resource, no bridge). The
+  and the relay's `WLANDR_VERSION` (guest/distro/debian/pins.sh) change
+  together (the link protocol is theirs). The relay comes with the Debian
+  image, so it matches the page only where the image is the same
+  release's (the page's own images are); nothing checks the link's
+  version, and `wland` reads only the relay's features for its own flags. The page needs wland
+  0.1.0-261122-6617578 or later (createWland's embedder
+  options and hooks, `setBounds`, `setTiled`, `setVisible`,
+  `setWindowPosition`, besides the `gpu` source, `view`, `readv` and the
+  clipboard bridge); older packages lack that API. The
   relay asset is `wlandr-link-linux-arm64.tar.gz` (the `--link`-only
   build, its entry `wlandr`). The relay at boot needs `--link-on-demand`
   (and `--version`, `--no-fence-wait`), and Firefox's input the core that
   sends seat events to every pointer and keyboard of a client: both in
-  wland 0.1.0-261122-632f589, the pin. With an older relay the boot
+  wland 0.1.0-261122-632f589. Both pins are 0.1.0-261124-3c987e5. With an older relay the boot
   starts none and shells get no session (plain apps fail as outside the
   page; `wland CMD` works as before). A new release: `WLANDR_VERSION` and
   `WLANDR_SHA256` in pins.sh and the npm version in `web/package.json`
-  (and the lockfile), then `kernel/build.sh base`
+  (and the lockfile), then `kernel/build.sh distro debian`
   without `KW_WLANDR`. To try a local wland build:
   `KW_WLANDR=<wland>/zig-out/release/wlandr-link-linux-arm64 kernel/build.sh
-  base` (guest/base/build.sh; refused with `KW_RELEASE=1`), and for the
+  distro debian` (guest/distro/debian/build.sh; refused with
+  `KW_RELEASE=1`), and for the
   page a build against that checkout's package: copy its `package.json`,
   `LICENSE`, `README.md` and `dist/` to a directory of their own, then
   `KW_WLAND_PKG=<dir> node node_modules/vite/bin/vite.js build` in `web/`
@@ -742,17 +1390,27 @@ answered at the kernel's next yield.
   `web/node_modules` (Nitro's `last-build.json` is put back), `web/.output`
   and a running dev server alone: never replace `web/node_modules/wland`,
   a pnpm store link (a swapped package broke a running dev server's page).
-- The launcher's foot demo (`demos/foot.ts`, Debian: foot,
+- The launcher's foot app (`apps/gl/foot.ts`, Debian: foot,
   fonts-dejavu-core, fontconfig; `needs.wayland`: dimmed without the
   desktop) runs plain `foot` (the session is in every shell, the relay
   runs from boot); its README suggests wl-clipboard, wayland-info and a
-  GTK 3 app (l3afpad). The GL windows
-  demo (`demos/wlgl.ts`, Debian: mesa-utils; `needs.wayland`) runs `wland
-  es2gears_wayland` after `eglinfo -B -p wayland`; its README suggests
-  glmark2-es2-wayland and gtk4-widget-factory (GTK 4).
-- `KW.wayland`: `windows()` (title, focused, maximized, fullscreen,
-  minimized), `container()`, `loaded()`, `popups()` (mapped now) and
-  `popupKeys()`, `stats()` (buffer handles opened; reads, how many in
+  GTK 3 app (l3afpad). The GL windows app (`apps/gl/wlgl.ts`, Debian:
+  mesa-utils; `needs.wayland`) runs `es2gears_wayland` after `eglinfo -B
+  -p wayland`; its README suggests glmark2-es2-wayland and
+  gtk4-widget-factory (GTK 4). Other Wayland apps are in the Browsers,
+  Desktop and Games groups: SDL games (what they share: `apps/sdlwl.ts`), X11 apps in
+  one rootful Xwayland window with twm (`apps/xwl.ts`). Started from the
+  launcher, a Wayland app's terminal is its log (`launcher.ts`): its tab
+  opens selected, as any app's, and shows until the app's window maps and
+  takes the focus (with `terminal: "window"` its own Terminal window is
+  minimized at once instead); it closes when run.sh ends with status 0
+  and stays after a failure. While a launcher app's window is open the
+  app's tile stands for that window, not for the terminal.
+- `KW.wayland`: `windows()` (key, title, appId, decorated, focused,
+  maximized, fullscreen, minimized), `container()` (the workspace,
+  `#workspace`, which holds the window elements and `#wl-desktop`),
+  `loaded()`, `popups()` (how many are mapped now) and `popupKeys()`
+  (their canvases' `data-wland`), `stats()` (buffer handles opened; reads, how many in
   place and of those views, bytes, the reads' total and longest time;
   commits; GPU commits, images, waits for the renderer, image()'s total
   and longest time, and resolve to release, which includes wland's draw),
@@ -832,7 +1490,7 @@ answered at the kernel's next yield.
   (its chunk nor its wasm), foot's window mapped about 1 s after the click
   (33 s from a fresh Debian, apt over the page's network), its pixels on
   the page, typed keys reached its shell and not the terminal, `exit`
-  closed it and hid the desktop, the relay ran on, a second `wland` reused
+  closed its window and the focus left it, the relay ran on, a second `wland` reused
   it, a killed relay was replaced by the next `wland foot`; two foot
   windows (focus by click, keys to the focused one, closing one gives the
   other the keyboard), Alt+F10 and the page resized while maximized,
@@ -840,7 +1498,7 @@ answered at the kernel's next yield.
   l3afpad (GTK 3): typing, its context menu (a popup) and Escape, Ctrl-A
   Ctrl-A then Ctrl+C to wl-paste; foot's keys (Ctrl-C, Up, Left, Alt+.,
   Ctrl-U, auto-repeat: 24 x for a 1.13 s hold, Ctrl-A Ctrl-A), Ctrl-A w
-  both ways and the status line's window, with the focus following;
+  both ways, with the focus following;
   Suspend with foot open (worker mode) and a plain load resumed, the relay
   reconnected, a new foot mapped; a session saved with `?shm=0` resumed
   without kwshm and the next boot had it. Again with wland's release
@@ -861,8 +1519,10 @@ answered at the kernel's next yield.
   relay has `--dmabuf`; llvmpipe frames in shm windows) and `?gpu=0`
   (virpipe frames over the vtest link in shm windows). Not checked: real
   GPUs (wland's WebGL path; the GPU path's cost there), Safari,
-  phones (touch, the on-screen keyboard), the guest display under the
-  desktop.
+  phones (touch, the on-screen keyboard), the guest's Display window next
+  to Wayland windows. By hand on the page (2026-11-22, wland
+  0.1.0-261122-6617578, the embedder API above): it runs, and foot's
+  window has the page's frame.
 - Firefox (Debian's firefox-esr 153, 2026-11-22, headless Chromium,
   worker mode on 4 CPUs, `debian-disk.mjs --firefox`): WebRender on
   virgl, its window by GPU resource (ARGB8888, one buffer reused, as wland
@@ -873,7 +1533,7 @@ answered at the kernel's next yield.
   time in I/O wait) and the first page takes minutes; with 2 GiB (the
   page's default on desktops) its window maps in about 45 to 65 s (a new
   profile; 24 s for the next start in the same boot). Its input
-  needs wland 0.1.0-261122-632f589 (the pin); before it Firefox took none,
+  needs wland 0.1.0-261122-632f589 or later; before it Firefox took none,
   on the GPU path and in software alike: wland
   0.1.0-261122-f36330a kept one wl_pointer and one wl_keyboard per client (the
   last made; `pointer_id`, `keyboard_id` in its compositor.zig), while
@@ -949,7 +1609,7 @@ answered at the kernel's next yield.
 
 ## Several CPUs
 
-The CPUs option (System tab, Options, the `#opt-cpus` slider; `?cpus=N`,
+The CPUs option (Settings, Machine, the `#opt-cpus` slider; `?cpus=N`,
 config.ts) boots the SMP kernel on N CPUs (kernel/smp.md; js.md, CPU
 threads). Default in worker mode where the page can boot the SMP
 kernel: the suggested count (`cfg.cpuDefault`); else 1, the UP kernel.
@@ -961,10 +1621,9 @@ other options.
 - Choices: 1, 2, 4, 8 and 16 up to `navigator.hardwareConcurrency`, and
   that count itself (the kernel's limit is 16, `NR_CPUS`), plus the suggested count,
   hardwareConcurrency / 2 up to `SUGGESTED_CPUS` (4 on desktops, 2 in
-  Firefox, none on phones until measured; config.ts, with the
+  Firefox and on phones; config.ts, with the
   /profile.html numbers behind it), marked
-  "(suggested)" (none below 4 threads, and none in WebKit: Safari 27.2 ran
-  parallel work slower on every added CPU, 2026-11-19; `webkitEngine()`).
+  "(suggested)" (none below 4 threads; desktop Safari as Chrome: testing.md, Profiling CPUs and worker mode).
   A count past the suggestion (past one where there is none) is there to
   try: selected, the slider, its value and its note turn red (`Stop.warn`).
   Half the host's threads stay free for the page, the browser and other
@@ -972,15 +1631,15 @@ other options.
   that wait for it (status.md, SMP, under host load). A larger `?cpus=` is
   capped at the thread count.
 - `smpBlocker()` (config.ts) disables the slider, with the
-  reason under it (`#opt-cpus-note`) and in the Environment tab's
-  "Guest CPUs" row: no SMP kernel in the page's bundle (`kernelSmpUrl`
+  reason under it (`#opt-cpus-note`) and in the "Guest CPUs" row of
+  System's Environment: no SMP kernel in the page's bundle (`kernelSmpUrl`
   null: a bundle without the SMP patch), no cross-origin isolation (a plain-http
   LAN page), no Web Workers or no `Atomics.waitAsync`
   (`webCpuBlocker({ worker: true })`), or one host thread. Such a load
   with `?cpus=N` boots on one CPU as usual and says why.
 - With several CPUs, boot.ts loads `kernelSmpUrl` instead of `kernelUrl`
   (streaming compile; the UP bundle is not fetched) and boots in worker
-  mode (`cfg.worker` is set, not `?worker=1`; Options shows the Worker
+  mode (`cfg.worker` is set, not `?worker=1`; Settings shows the Worker
   thread box ticked and disabled, keeping its own value for one CPU), with
   `cpus`; the kernel worker starts the other CPUs as nested Web Workers.
   The download starts only after the suspended session was offered
@@ -1051,9 +1710,8 @@ other options.
 
 ## Suspend and resume
 
-Suspend (Ctrl-A z, `z` in the dialog, the dialog footer's `#suspend`, the
-status line's pause icon `#bar-suspend` while the system runs, or
-`KW.suspend()`; `ui.suspend()`, no question: the machine stops only once its
+Suspend (Ctrl-A z, the Control Center's `#tb-suspend`, the top bar's mark
+menu, Settings' footer `#suspend`, or `KW.suspend()`; `ui.suspend()`, no question: the machine stops only once its
 session is stored, and Resume brings it back) saves the running machine with the SDK's
 `snapshot({ commit })` (js.md, Snapshots), inline or in worker mode: the
 kernel waits at its snapshot point while the page writes the session, and
@@ -1065,10 +1723,11 @@ session was not saved (why); the system runs on"); a record written but
 given up after all (the timeout came first) is deleted. The page then shows "Suspended" (an `[  OK  ]` line, not a red
 notice; the "Suspending…" toast goes), the store's `suspended` is set,
 and a Resume card (`#resume-card` with `#resume`, Overlays.tsx: "The system
-is saved in this browser (N MiB).") sits in the middle of the stage, over
-whatever window is shown there (App.tsx renders it above the display and
-the preview), which shows dimmed behind it (the dim takes no clicks), with
-a play icon `#bar-resume` in the status line. Resume takes the focus when
+is saved in this browser (N MiB).") sits in the middle of the desktop,
+over every window (App.tsx renders it after the desktop), whose last
+screen shows dimmed behind it (the dim takes no clicks, so a terminal
+still scrolls), and the power items say Resume (`#tb-resume`, Settings'
+`#resume-settings`). Resume takes the focus when
 the card appears (not from a field or dialog the user is in), so Enter or
 Space resumes; toasts keep their corner, below it. Resume (`ui.resume()`)
 sets sessionStorage `kw-resume` and reloads the same URL; the load reads it
@@ -1093,8 +1752,10 @@ deletes it: the fresh boot changes the disk; autosuspend.ts
   other older version, unawaited): `meta` (time, the page's kernel URL, UP
   or SMP, the CPU count, the banner, the device
   options, the disks' snapshot state, the console's last 64 KiB, the
-  preview panel, the terminal windows 1-9 whose sessions the snapshot lists
-  (number, name, session id) and the window shown) and `bytes` (the `encodeSnapshot()` Blob, made before the
+  Browser window (port, path, shown), the terminals 1-9 whose sessions
+  the snapshot lists (number, name, session id, the Terminal window they
+  were tabs of and whether shown there) and the current terminal) and
+  `bytes` (the `encodeSnapshot()` Blob, made before the
   transaction opens), written in one transaction with strict durability
   (where the engine has it), which a given-up commit aborts. It never opens
   `kwdisk:kwdata-v1`.
@@ -1113,30 +1774,31 @@ deletes it: the fresh boot changes the disk; autosuspend.ts
   redraws nothing; below); where the boot lines showed after all (a plain
   load whose session took over 2 s to read), "Resumed the
   session suspended …" and the summary come first.
-  Terminal windows 1-9 survive: their sessions are kwtty's detachable ones
+  Terminals 1-9 survive: their sessions are kwtty's detachable ones
   (js.md), which the restore's reset of their vsock connections detaches
   instead of hanging up, so their shells and programs run on. The resume
-  opens each saved window again with its number and name, `attach()`es its
-  session (`windows.reattach()`) and shows the window shown at the
-  suspend. The screen comes from kwtty: it replays the last 64 KiB of the
+  opens each saved terminal again with its number and name, as tabs
+  grouped in Terminal windows as they were (older records: all in the
+  console's window), `attach()`es its session (`wterms.ts` `reattach()`)
+  and selects the terminal that was current at the suspend. The screen comes from kwtty: it replays the last 64 KiB of the
   session's output into the fresh wterm (from a line start, behind the
   terminal modes in force there), and a full-screen program on the
   alternate screen gets two SIGWINCHs and redraws (busybox vi does not use
   the alternate screen: its last full draw in the replay is what shows).
   The guest keeps a detached session for 60 s; one gone by then gives a
-  tty N window a new shell with a gray line saying so, and a demo's window
-  shows that it ended; a record without windows reopens none. Not yet
+  tty N terminal a new shell with a gray line saying so, and an app's
+  terminal shows that it ended; a record without terminals reopens none. Not yet
   checked in a browser (the SDK side: `test/api.test.ts`). Network
   connections do not survive (their TCP ends are reset), nor do
   `vm.exec()` pipes. A guest server keeps running and listening, but
   its connections from the old page (the preview's requests) are reset. The
-  preview panel open at the suspend (port, path, shown, filling) opens again
+  Browser window open at the suspend (port, path, shown) opens again
   once its port answers (`reopenPreview()`, `waitPort()` from launcher.ts,
   at most 15 s; else a toast says Ctrl-A p opens it), on the new kernel's
   vmId: the old iframe could not have been kept, since the resume is a
   reload.
 - Suspend in the background (`autosuspend.ts`, wired in boot.ts;
-  `?autosuspend=now|<seconds>|0`, the Options radios
+  `?autosuspend=now|<seconds>|0`, Settings' Session radios
   `#opt-autosuspend-<value>`): once the tab has been hidden that long, the
   page saves the session as Suspend does (written while the kernel waits at
   its snapshot point), but holds the kernel there instead of stopping it
@@ -1170,7 +1832,8 @@ deletes it: the fresh boot changes the disk; autosuspend.ts
     no Resume card (the status is "Suspended", the Kernel log and the
     Environment row say it), and with `kw-resume` `auto` (or `1`, after the
     Resume button: every resume is the same, autosuspend.ts `quietStart()`)
-    the load keeps the splash ("Resuming") over the terminal and holds back
+    the load shows "Resuming" (the boot indicator, and the console window's
+    placeholder: BootIndicator.tsx `useBlank()`) and holds back
     the host's boot lines until the restore, whose first paint is the screen
     as it was, then the toast; a load that boots fresh or fails after all
     shows them (`unquiet()` in boot.ts). A plain load does the same once
@@ -1195,7 +1858,9 @@ deletes it: the fresh boot changes the disk; autosuspend.ts
   differs from the device's default.
   - Only a machine worth keeping: one the user typed into, tapped or
     clicked since it booted (trusted `keydown`, `pointerdown`, `input`,
-    `paste` outside `#panel`, `#bar` and `#confirm`), or a resumed one. An
+    `paste` outside the page's own controls, focus.ts `isPageChrome()`:
+    the system apps, the Dock, the top bar and their menus, `#confirm`),
+    or a resumed one. An
     untouched machine boots again in about a second.
   - Shown again before the snapshot started, nothing happens (the timer is
     cancelled); while it saves, it finishes and then goes on. A refusal
@@ -1271,7 +1936,8 @@ deletes it: the fresh boot changes the disk; autosuspend.ts
   display's keyboard routing leaves the card's keys alone). Closing the tab then asks nothing (held), and the next
   load resumes it quietly, as after a hold in the background. Continue, or
   any key typed for the guest (a terminal or the display; not the
-  shortcut prefix, the dialog or the page's fields), goes on in place
+  shortcut prefix, the page's own windows, bars and fields: focus.ts
+  `ownsKeys()`), goes on in place
   (`continueHeld()`, which deletes the record, as when a held tab is
   shown). Unlike that hold, hiding and showing the tab does not end it
   (AutoSuspend leaves a held machine alone). After `AUTO_SUSPEND_HOLD_MS`
@@ -1327,23 +1993,25 @@ fails.
 
 ## Guest preview
 
-A web server running in the guest (say on port 8000) shows in a panel
-docked right of the stage (`Preview.tsx`), or in a tab of its own, at
-`/vm/<vmId>/<port>/<path>`. The vmId is random per booted kernel
-(`preview.ts`). Ways to open it: Ctrl-A p (it opens on the last port, or
-8000; pressed again it hides or shows the panel), the Preview section in
-the Guest tab, the status line's globe icon on the right (`#bar-preview`,
-which hides and shows it; the port is in its tooltip), `KW.preview.open(port)`, and in the guest
-`open` or `xdg-open http://localhost:<port>/<path>` (`open.ts`, after a confirm). On wide screens the panel takes part of the
-stage's width, so the terminal (and the display offered to the guest) gets
-narrower; its left edge sets the split (localStorage `kw.previewSplit`,
-default 40%) and `[□]` fills the stage. On narrow ones (under 720 px) it
-fills the stage. While it covers the stage it is a view like a terminal
-window or the display: picking one of those (`windows.ts` `select()`,
-`toggleDisplay()`) hides it, and the status line marks only the globe as
-current. Hidden, the terminal gets its width back. It has a port field, reload,
-and a link that opens the URL in a new tab. It is no URL parameter, so it
-has no Options control.
+A web server running in the guest (say on port 8000) shows in the Browser
+window (`preview.ts`; its content `Preview.tsx`: reload, the address as
+`localhost:PORT/path`, which takes a port, a port and path or a path, a
+link that opens the same URL in a new tab, over an iframe), or in a tab of
+its own, at `/vm/<vmId>/<port>/<path>`. The vmId is random per booted
+kernel. Ways to open it: Ctrl-A p (on the last port, localStorage
+`kw.previewPort`, else 8000; pressed again it brings the window to the
+front, or minimizes it when it is in front), an app's `ports` once the
+first answers, the preview in Settings' Network section (`#preview-open`),
+`KW.preview.open(port)`, and in the guest `open` or `xdg-open
+http://localhost:<port>/<path>` (`open.ts`, after a confirm). It opens in
+the right part of the workspace, beside a terminal, with its Dock tile
+`#dock-preview`, and the guest's Display window goes under it
+(minimized). Closing it unloads the page; minimized, it stays loaded. The
+address follows the page (read from the iframe on each load and
+navigation), and the page's title is the window's. Inside the iframe the
+page sees no keys, so the Ctrl-A prefix needs a click on the toolbar or
+the title bar first. It is no URL parameter, so it has no Settings
+option.
 
 - Relay: `public/vm-sw.js`, a plain script served at `/vm-sw.js`, outside
   the TypeScript build: the page's one service worker (scope `/vm/`;
@@ -1388,13 +2056,35 @@ has no Options control.
   guest page's cross-origin subresources load only if they send CORP or
   CORS. A redirect to `/x` or to `http://localhost:<port>/x` is rewritten
   under the prefix.
-- Root-relative URLs: the worker answers only `/vm/<id>/<port>[/…]`.
-  Nothing outside it is relayed, so a preview document's `/style.css`
-  reaches the unkernel server, not the guest: guest pages must use
-  relative URLs. Navigations outside `/vm/` (a link to `/about`) reach the
-  server, which sends the page, and `main.tsx` sends them back under the
+- Root-relative URLs: a preview document's own requests outside `/vm/`
+  (`/style.css`, Vite's `/@vite/client`) reach the worker too, since it
+  controls that document. It relays them to the document's port
+  (`clients.get(clientId)` names it), except `/vm-ws.js`. Navigations
+  outside `/vm/` (a link to `/about`) are outside the scope: they reach
+  the server, which sends the page, and `main.tsx` sends them back under the
   prefix (`previewEscape()`: the iframe's `data-kw-preview`, or in a tab the
   referrer) instead of booting a second kernel.
+- WebSockets never reach a service worker. The worker puts
+  `<script src="/vm-ws.js" data-kw-vm data-kw-port>` into each relayed
+  navigation answered with HTML (2xx, not 206, no `content-encoding`), right
+  after the doctype (else at the start, after a BOM), drops its
+  `content-length`, and copies a `'nonce-…'` from the guest's CSP header
+  onto the tag. That shim (`public/vm-ws.js`, plain script, `no-cache`)
+  replaces `window.WebSocket`. URLs reaching the guest are
+  `ws://localhost:<port>` (or 127.0.0.1), this origin's
+  `/vm/<vmId>/<port>/…`, and other same-origin paths, which go to the
+  document's port. Other URLs get the browser's own WebSocket (`instanceof`
+  holds for both). The shim talks to the page over the BroadcastChannel
+  `kw-vm-<vmId>` (message format at the top of `vm-ws.js`); the page side
+  is `preview-ws.ts`. Each socket is `websocketOver()` (`js/core/ws.ts`,
+  RFC 6455 over `vm.connect()`, no extensions) with `origin` set to
+  `http://localhost:<port>`. At most 32 sockets are open at once, apart
+  from the 8 relayed requests. The guest's messages go out 16 ahead of the
+  document's acks, so a slow document holds the guest back. Web Locks
+  tell each side when the other is gone: the document holds `kw-ws-<id>`
+  while a socket lives, the page holds `kw-vm-<vmId>`. A page that does not
+  take a socket within 5 s (none runs that kernel, or an older build) fails
+  it: `error`, then `close` 1006. `attachPreview(null)` ends every socket.
 - Server: `/vm/**` reaching the server (a shift-reload bypasses the worker,
   or the worker is not installed) gets a 503 page from `server/vm.ts` that
   says the preview needs the page open, not the app. Its link to `/` is
@@ -1405,14 +2095,16 @@ has no Options control.
 - Limits: same-origin and trusted content only, since the guest's pages can
   script the unkernel page (`parent.KW`). A sandbox without
   `allow-same-origin` would take the iframe out of the worker's control. A client-side
-  router sees the `/vm/<id>/<port>` prefix in `location`. WebSockets and
-  Vite-style HMR bypass service workers, so they do not reach the guest.
-  Cookies are not set. A tab on the URL works only while the page that
+  router sees the `/vm/<id>/<port>` prefix in `location`. WebSockets opened
+  in workers, `about:blank` or `srcdoc` frames, or pages whose CSP (a
+  `<meta>` one, or a header without a nonce or `'self'`) blocks the shim
+  do not reach the guest. Cookies are not set. A tab on the URL works only while the page that
   owns the vmId stays open, and a reload gives a new vmId. There is no
   back-pressure beyond the 4 chunks ahead plus one per pull. A long
   stream may be cut when the browser stops a worker whose event runs for
   minutes. Checked by hand only, plus a Node harness of the
-  relay against a fake `vm.fetch`. No browser test.
+  relay against a fake `vm.fetch`, and `pnpm test:ws` for the WebSocket
+  client. No browser test.
 - Trying it by hand: the image's busybox has no httpd. In a terminal
   window, run `sudo apk add busybox-extras`, then `mkdir -p /tmp/www && echo hi >
   /tmp/www/index.html && httpd -f -p 8000 -h /tmp/www`. Or run `sudo apk add
@@ -1421,86 +2113,135 @@ has no Options control.
 
 ## Launcher
 
-The status line's first item (`❯`, `#bar-launcher`), ⌘K on Apple
-devices, Ctrl-Shift-O or Ctrl-A o open the launcher (`#launcher`, `Launcher.tsx`, the store's `launcher`):
-an overlay over the whole page in the manner of macOS Launchpad, the page
-blurred behind a grid of tiles (glyph and gradient from the demo) and a
-search field. The focus stays in the field (tiles take none), so
-display.ts never routes its keys to a program holding the guest's
-keyboard; arrows select, Enter runs, Esc clears the search, then closes; a
-click on the backdrop closes. On touch devices the field is not focused.
-A demo's `icon` is a glyph or a pictogram as inline SVG markup (static
-strings in the demo file, set as inner HTML): project logos from Simple
-Icons (CC0, the slug in a comment), else the project's own mark from its
-site (the source in a comment), crafted ones otherwise.
-After the demos comes a gray System tile that opens the dialog
-(`PANEL_TILES`), which works in any state.
+The Dock's first tile (`#dock-launcher`), ⌘K on Apple devices,
+Ctrl-Shift-O or Ctrl-A o open the launcher (`#launcher`, `Launcher.tsx`,
+described at its top; the store's `launcher`; only while the system
+runs): an overlay in the manner of the iOS home screen, the page blurred
+behind a search field and a grid: the page's own apps first (Terminal,
+Settings, System: the inline `system` group), then a folder per group,
+whose face is a fan of its first apps' icons and which opens in place
+(`#launcher-folder`). Typing searches every app in one flat grid. The
+focus stays in the field (tiles take none), so display.ts never routes
+its keys to a program holding the guest's keyboard; arrows select, Enter
+opens a folder or runs an app, Esc closes the folder, then clears the
+search, then closes the launcher; a click on the backdrop closes it. On
+touch devices the field is not focused. A tile's or a folder's menu (a
+right click, a long press, the ContextMenu key or Shift-F10;
+`#launcher-menu`) has Open, and Keep in Dock or Remove from Dock (the app,
+or the folder's group). A running app (a terminal named after it, or a
+page app's open window) has a dot under its tile, and picking it shows
+that window: an app runs once at a time. One being installed has a bar,
+and picking it shows its installer. One the page cannot run
+(`unavailable()`: its `needs`, display, net, sound or wayland, ruled out
+by the page's options, or `packages` that leave out this boot's distro)
+is dimmed, with why. An app with `hidden` set is left out (Browser, which
+opens by itself, among them).
 
-The demos are one file each in `src/demos/`, listed in order in
-`src/demos/index.ts`; `launcher.ts` runs them. The page ships no assets for
-them, so a demo is text only (`Demo` in launcher.ts): `files` written under
-its directory (`~/demos/<id>` by default) with one `vm.exec()` each (or a
-function that loads them at launch with a dynamic import, which keeps
-their text out of the page's main chunk), plus
-a generated `run.sh` there for the running distro (the `packages` it
-names for that distro, `{ alpine, debian }`, not yet installed: on Alpine
-`/etc/kw-apk-enable` when the demo sets `community`, then `apk add`; on
-Debian `apt-get install`, again after `apt-get update` when the baked lists
-name a version the mirror dropped; then the `commands`, each printed
-before it runs, under `set -e`). The files, run.sh and the window are the
-session's user's (`user` on the distros): run.sh starts with `SUDO_SH`
-(`sudo.ts`) and runs the package manager, and the commands a demo writes
-as `$SUDO cmd` (nginx's server, PostgreSQL's `start.sh`, Ubuntu's
-chroot, sshfs's mount), with sudo, printed as `sudo cmd`; where it runs as
-root (the base shell, which has no sudo) both are plain. A demo directory
-outside the user's reach (nginx's `/srv/nginx`) is made and handed to the
-user with sudo, and a file the user cannot write (PostgreSQL's
-`createcluster.d` file under `/etc`) is written with sudo. A demo runs only on the distros its
-`packages` name; its scripts handle what else differs (Doom's and
-Ubuntu's, with no `packages`, run on both). A new terminal
-window named after the demo runs `sh -lc` with a wrapper in place of the
-login shell: `cd <dir> && ./run.sh`, then `exec` the login shell, so the
-window stays to edit and rerun (an INT trap keeps the wrapper alive through
-Ctrl-C). Typing the command into a fresh shell lost the start of the line,
-because the login discards input typed ahead of its prompt. The preview opens once the
-guest answers http on the first of its `ports`. The distros' nginx default
-site also listens on `[::]:80`, which fails in the guest (no IPv6), so the
-nginx demo replaces it. A demo's files are text in its own file: Doom (`web/src/demos/doom.ts`) carries the `fbdoom` script (fbDOOM built in
-the guest with tcc, on `/dev/fb0` with evdev input and `/dev/dsp` sound,
-installed in `~/.local/bin` and building into `~/.local/share/fbdoom`; the
-first run took 22 s to the first frame, a later one 0.2 s, 2026-11-18) and
-its patches to fbDOOM as template literals, and these GPL-2.0-or-later texts keep their license
-(the script's SPDX header) inside the MIT bundle. Files with absolute paths land outside the demo directory, and
-files from an earlier launch are never removed. A demo's `downloads`
-(url, SHA-256, size, guest path, an optional `unless` shell test) are
-fetched by the page before its window opens (`download.ts`, described at
-its top): the sites send no CORS headers and the page is cross-origin
-isolated, so it speaks plain http over its own Wisp connection, as apk.ts
-does, follows redirects as http (a site that redirects to https only
-fails; a download with `cors`, for a site that sends
-Access-Control-Allow-Origin such as releases.fx.sh, is a direct `fetch()`
-instead), checks the SHA-256 and keeps the file in the Cache API
-(`kw-files-v1`), then pushes it with one `vm.exec()` (through a `.part`
-file, size checked). It skips a file that is in the guest already at that
-size, or whose `unless` passes in the demo's directory. A failure is a toast
-and a log line, not fatal, so the demo's script checks the file itself and
-downloads it when it is missing (Ubuntu does). On 2026-11-15 (Node, the
-default Wisp server) the riscv64 Ubuntu Base tarball (31 MB) took 1.5 to
-4.4 s to fetch and 0.2 s to push; the arm64 26.10 one (35 MB) took 0.3 s
-to push (Node SDK, 2026-11-18). A demo with `hidden` set is left out of the launcher. A demo runs once at a time: picking one whose window
-is open (a dot under its tile) shows that window. A demo whose `needs`
-(display, net, sound; wayland: the Wayland desktop) the page's options rule out is dimmed, with why; so
-is one whose `packages` leave out this boot's distro.
-Failures are toasts. Checked by hand only.
+The apps are in `src/apps/` (`apps/types.ts`, described at its top): one
+file per app in its group's folder, whose `index.ts` declares the group
+with `defineGroup()` (title, icon, colours; `inline`: at the top level)
+and lists its apps in order; `apps/index.ts` lists the groups (`GROUPS`)
+and every app (`APPS`). An app's `kind` is `page`, one of the page's own
+windows, which it opens itself (Terminal, Browser, Settings, System; the
+same declaration is its window's `AppMeta`), or `terminal` (the default),
+which `launcher.ts` runs. An app's `icon` is a glyph or a pictogram as
+inline SVG markup (static strings in the app file, set as inner HTML):
+project logos from Simple Icons (CC0, the slug in a comment), else the
+project's own mark from its site (the source in a comment), crafted ones
+otherwise. Apps on the guest's display (the Display window) use its
+framebuffer, or X on its DRM device (`apps/xkms.ts`: X + glamor and the
+games without a Wayland backend that works here); the other graphical
+apps are Wayland windows (Wayland desktop, above).
 
-Every demo's run.sh, as the launcher writes it, was run on the aarch64
-guest through the Node SDK on 2026-11-18: a fresh data disk per demo, 512
-MiB, the files written with `vm.exec()` and run.sh in a pty session (the
-window's command without the wrapper), the host's network instead of Wisp,
-a display or sound card where the demo needs one, and the Ubuntu tarball
+The page ships no assets for terminal apps, so one is text only
+(`TerminalApp`, `launcher.ts` described at its top). `launch()` first
+checks in one `vm.exec()` what is missing: the `packages` it names for
+this boot's distro (`{ alpine, debian }`) not installed yet, and
+`downloads` not in the guest (unless their `unless` test passes). With
+nothing missing the app starts at once. Else its installer does the
+preparation out of sight (`installer.ts`, `Installer.tsx`, both described
+at their top): a small fixed-size window of its own (`install-<id>`,
+`#installer-<id>`) with the app's icon, one progress bar, the current
+step, a Log disclosure (the real output) and Cancel, while the app's Dock
+and launcher tiles show the bar; the user can keep working, minimize it
+or start another install meanwhile. It closes when done and the app
+starts; a failure stays, with the error, the log and Retry. Progress is
+weighted stages and never goes back; the package manager's output is
+parsed for it (`packageParser()`: apk's `(3/12) Installing` lines, apt's
+`APT::Status-Fd` lines). Cancel only while stopping is safe (the page's
+own work and the package manager's downloads; never while packages
+unpack, which would leave them half installed); the close button cancels
+then, else minimizes. A machine held (Pause, a suspend in the background)
+shows as Paused.
+
+The preparation: the app's `files` written under its directory
+(`~/.apps/<id>` unless it sets `dir`; an old `~/demos/<id>` is moved
+there first) with one `vm.exec()` each (or a function that loads them at
+launch with a dynamic import, which keeps their text out of the page's
+main chunk), a generated `run.sh` and, when it has packages,
+`install.sh`; the downloads; then `install.sh` on pipes (`vm.spawn()`, no
+terminal) in a login shell: on Alpine `/etc/kw-apk-enable` when the app
+sets `community`, then `apk add`; on Debian `apt-get install`, again
+after `apt-get update` when the baked lists name a version the mirror
+dropped. `run.sh` runs `./install.sh` first too (a no-op once installed,
+so the app's terminal shows only the app; it installs again when the
+user removed something), then the `commands`, each printed before it
+runs, under `set -e`. The files, the scripts and the terminal are the
+session's user's (`user` on the distros): the scripts start with
+`SUDO_SH` (`sudo.ts`) and run the package manager, and the commands an
+app writes as `$SUDO cmd` (nginx's server, PostgreSQL's `start.sh`,
+Ubuntu's chroot, sshfs's mount), with sudo, printed as `sudo cmd`; where
+they run as root (the base shell, which has no sudo) both are plain. An
+app directory outside the user's reach (nginx's `/srv/nginx`) is made and
+handed to the user with sudo, and a file the user cannot write
+(PostgreSQL's `createcluster.d` file under `/etc`) is written with sudo.
+An app runs only on the distros its `packages` name; its scripts handle
+what else differs (Ubuntu's, with no `packages`, runs on both). Files
+with absolute paths land outside the app's directory, and files from an
+earlier launch are never removed. The distros' nginx default site also
+listens on `[::]:80`, which fails in the guest (no IPv6), so the nginx
+app replaces it.
+
+Then the app's terminal, named after it: a tab of the Terminal window
+that last had the focus, or with `terminal: "window"` (a REPL, an agent,
+a full-screen program) a Terminal window of its own, shown with the
+app's icon and title while that is its only tab. It runs `sh -lc` with a
+wrapper in place of the login shell: `cd <dir> && ./run.sh`, then `exec`
+the login shell, so the terminal stays to edit and rerun (an INT trap
+keeps the wrapper alive through Ctrl-C). Typing the command into a fresh
+shell lost the start of the line, because the login discards input typed
+ahead of its prompt. A Wayland app's terminal (`needs.wayland`) is its
+log: it closes when run.sh ends with status 0 and stays after a failure.
+The preview opens once the guest answers http on the first of its
+`ports`.
+
+A terminal app's `downloads` (url, SHA-256, size, guest path, an optional
+`unless` shell test) are fetched by the page in its installer
+(`download.ts`, described at its top): the sites send no CORS headers and
+the page is cross-origin isolated, so it speaks plain http over its own
+Wisp connection, as apk.ts does, follows redirects as http (a site that
+redirects to https only fails; a download with `cors`, for a site that
+sends Access-Control-Allow-Origin such as releases.fx.sh, is a direct
+`fetch()` instead), checks the SHA-256 and keeps the file in the Cache
+API (`kw-files-v1`), then pushes it with one `vm.exec()` (through a
+`.part` file, size checked). A failure is a line in the installer's log,
+not fatal, so the app's script checks the file itself and downloads it
+when it is missing (Ubuntu does). On 2026-11-15 (Node, the default Wisp
+server) the riscv64 Ubuntu Base tarball (31 MB) took 1.5 to 4.4 s to
+fetch and 0.2 s to push; the arm64 26.10 one (35 MB) took 0.3 s to push
+(Node SDK, 2026-11-18). Launch failures are toasts. The installer is
+driven by `test/wland/page-check.mjs --fresh` (the foot tile's apt path);
+the rest is checked by hand.
+
+Every app's run.sh then in the launcher (it installed the packages
+itself) was run on the aarch64 guest through the Node SDK on 2026-11-18:
+a fresh data disk per app, 512 MiB, the files written with `vm.exec()`
+and run.sh in a pty session (the terminal's command without the wrapper),
+the host's network instead of Wisp, a display or sound card where the app
+needs one, and the Ubuntu tarball
 pushed as `downloads` does (a scratch harness, not in the repository).
 Each reached its working state: the
-servers answered over `vm.fetch()` (nitro's echo POST), postgres's `select version()` said aarch64, glimmer and Doom drew
+servers answered over `vm.fetch()` (nitro's echo POST), postgres's `select version()` said aarch64, glimmer drew
 frames, radio and speak played sound, sshfs mounted Rebex's server.
 Seconds from run.sh's start, the `apk add` step (indexes and packages
 over the host's network) first, then the time to the working state:
@@ -1512,9 +2253,10 @@ SQLite 1.7/2.9, Valkey 2.1/3.3, radio 1.7 (sound about 1 s after a
 station is picked), speak 2.4 (the introduction starts at once),
 asciiquarium 6.7/6.8 (community), glimmer 0.1 (no packages), Ubuntu 28
 (extracting the pushed tarball; 0.2 later, `apt-get update` 28 s in the
-chroot), Doom 22 (tcc install, downloads and a 6 s build; 0.2 later).
-The REPL and toolchain demos (Claude Code, fx, Bun, Node.js, Python, Go,
-Rust) came after that run and have not been through it.
+chroot).
+The REPL and toolchain apps (Claude Code, fx, Bun, Node.js, Python, Go,
+Rust), Doom (Debian's dsda-doom, a Wayland window) and the Browsers,
+Desktop and Games groups came after that run and have not been through it.
 Docker (Debian only: `docker run --rm hello-world` through the image's
 docker shim, kernel/guest.md) came later too: with Docker installed, its
 command pulled and ran hello-world in 6 s (Node SDK, 1 GiB, data disk, the
@@ -1522,16 +2264,16 @@ host's network, 2026-11-19); the first run adds the shim's install
 (about 1 min).
 
 `?showcase` runs `src/showcase.ts` once the guest is up: a
-fast, hands-off tour of the demos, leaving out the web servers (described at its top).
-Each step shows a caption and launches its demo.
+fast, hands-off tour of the apps, leaving out the web servers (described at its top).
+Each step shows a caption and launches its app.
 It waits for a process (`pgrep -f`), a pattern on the screen, the display or
 the preview, then plays it: keys typed into the terminal, or the evdev
-keyboard for glimmer and Doom. Then it closes the demo. A bar along the top
+keyboard for glimmer. Then it closes the app. A bar along the top
 shows progress, and the tour ends on a title card. `?showcase=a,b` runs only
-those steps. The tour does not wait: a demo not ready within 30 s is
+those steps. The tour does not wait: an app not ready within 30 s is
 skipped and logged, as is a step that fails. `?showcase=warm` launches each
-demo and waits until it is ready, without captions, so apk, npm and the
-Doom build come from the data disk on later tours. `KW.showcase` has
+app and waits until it is ready, without captions, so apk and npm
+installs come from the data disk on later tours. `KW.showcase` has
 `skip()`, `pause()` and `resume()`.
 
 ## Running and deploying
@@ -1598,6 +2340,6 @@ web/test/open.test.ts web/test/autosuspend.test.ts`).
   an iPhone is slow, check the origin first. The page does not warn about
   it.
 - JavaScriptCore collects freed JIT modules only when prompted (kwemu.md,
-  Collecting freed modules). On an iPhone the JIT row of the Environment tab
+  Collecting freed modules). On an iPhone the JIT row of System's Environment
   should show `collected` keeping up with `freed`, uncollected modules in
   the hundreds, and `refused` 0. Not yet measured on a phone.

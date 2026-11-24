@@ -12,7 +12,7 @@
 ::sysinit:/usr/lib/kw/welcome
 ::sysinit:/usr/lib/kw/net
 ::sysinit:/etc/kw-binfmt.sh
-hvc0::respawn:/usr/bin/kwtty login
-::respawn:/usr/bin/kwtty serve
+hvc0::respawn:/usr/bin/kwbox tty login
+::respawn:/usr/bin/kwbox tty serve
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/usr/lib/kw/shutdown

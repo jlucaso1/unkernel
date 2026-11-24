@@ -93,8 +93,8 @@ pub const Use = struct {
 
 /// Where an op is: its index k in block b (k instructions of b retired
 /// before it), its pc, and whether b is emitted as a self-loop (its
-/// terminator branches to b.pc and continues the module's `loop`; only for
-/// a block compiled on its own).
+/// terminator branches to b.pc and continues the module's `loop`, or in a
+/// region the member's own `loop`; a block compiled whole).
 pub const At = struct {
     k: usize,
     pc: u64,
@@ -405,11 +405,8 @@ pub fn poll(e: *Emit) void {
     e.addr();
     e.mem(W.i64_load, 3, a64_off + @offsetOf(state.Priv, "epoch_ptr"));
     e.addr();
-    if (e.shared) {
-        e.ops(&.{ 0xfe, 0x11 }); // i64.atomic.load
-        e.uleb(3);
-        e.uleb(0);
-    } else e.mem(W.i64_load, 3, 0);
+    // A plain load on a shared memory too (tier.epochNow says why).
+    e.mem(W.i64_load, 3, 0);
     e.get(jc.l_cpu);
     e.addr();
     e.mem(W.i64_load, 3, a64_off + @offsetOf(state.Priv, "seen_epoch"));

@@ -12,6 +12,7 @@ etc/apt/apt.conf.d/docker-autoremove-suggests
 etc/apt/apt.conf.d/docker-clean
 etc/apt/apt.conf.d/docker-gzip-indexes
 etc/apt/apt.conf.d/docker-no-languages
+etc/apt/preferences.d/kw-init
 etc/apt/sources.list.d/debian.sources
 etc/dpkg/dpkg.cfg
 etc/dpkg/dpkg.cfg.d/docker

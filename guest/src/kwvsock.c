@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 /*
- * kwvsock: a byte pipe over AF_VSOCK (static aarch64 musl), /usr/bin/kwvsock
- * in the Alpine initramfs. The SDK's vsock test (test/api.test.ts) drives it.
+ * kwvsock: a byte pipe over AF_VSOCK (static aarch64 musl), `kwbox
+ * vsock` in the base's kw layer (kwbox.c). The SDK's vsock test
+ * (test/api.test.ts) drives it.
  *
  *   kwvsock connect PORT [CID]   connect to CID (default 2, the host), PORT
  *   kwvsock listen PORT          accept one connection on PORT (any CID); says
@@ -33,7 +34,7 @@ static int fail(const char *what)
 
 static int usage(void)
 {
-	fprintf(stderr, "usage: kwvsock connect PORT [CID] | kwvsock listen PORT\n");
+	fprintf(stderr, "usage: kwbox vsock connect PORT [CID] | kwbox vsock listen PORT\n");
 	return 2;
 }
 

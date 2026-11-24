@@ -34,11 +34,12 @@ import { CowDisk, type BlockDevice } from "./block.ts";
 import { BootError } from "./load.ts";
 import type { DisplayMode, DisplaySize } from "./display.ts";
 import type { SoundChunk, SoundSink } from "./sound.ts";
+import { SoundRingWriter } from "./sound-ring.ts";
 import { sharedNow } from "./worker-devices.ts";
 import { SharedServer, applyEvdev } from "./worker-shared.ts";
 import { ShmShareServer, type ShmInfo } from "./shm.ts";
 import { VirglGpuBackend, type GpuInit, type GpuLink, type GpuReply, type GpuRequest } from "./gl-gpu.ts";
-import { SnapshotCommitError, awakeTimeout, receivedSnapshot, sentSnapshot, type KernelSnapshot, type SnapshotHoldDecision, type SnapshotOptions } from "./snapshot.ts";
+import { SnapshotCommitError, awakeTimeout, receivedSnapshot, sentSnapshot, snapshotTransfer, type KernelSnapshot, type SnapshotHoldDecision, type SnapshotOptions } from "./snapshot.ts";
 import { type FromWorker, type ToWorker, type WorkerBootSpec, type WorkerExit, type WorkerPort } from "./worker-protocol.ts";
 
 export interface ServeKernelOptions {
@@ -68,23 +69,36 @@ const awakeDelay = (ms: number) => new Promise<void>((r) => { awakeTimeout(r, ms
 const FRAME_POLL_MS = 16;
 
 /**
- * The worker's sound sink: posts each chunk and answers the kernel with the
- * frames queued at the owner's sink, estimated from its latest report.
+ * The worker's sound sink. With a sound ring (sound-ring.ts) the PCM and a
+ * record of each state change go into it, and the kernel's answer is what
+ * the ring's reader reported plus the frames still in the ring. Otherwise it
+ * posts each chunk and answers the kernel with the frames queued at the
+ * owner's sink, estimated from its latest report.
  */
-function soundSink(spec: { rate?: number; chunks: boolean }, post: (msg: FromWorker, transfer?: ArrayBuffer[]) => void): SoundSink & { report(seq: number, frames: number, at: number): void } {
+function soundSink(spec: { rate?: number; chunks: boolean; ring?: SharedArrayBuffer }, post: (msg: FromWorker, transfer?: ArrayBuffer[]) => void): SoundSink & { report(seq: number, frames: number, at: number): void } {
 	let seq = 0;
 	/** Frames sent in this stream, and after which chunk: [seq, frames sent up to and including it]. */
 	let sent = 0;
 	let marks: Array<[number, number]> = [];
 	let report: { frames: number; at: number; sentThen: number } | null = null;
-	const reset = () => { sent = 0; marks = []; report = null; };
+	const writer = spec.ring ? new SoundRingWriter(spec.ring) : undefined;
+	/** State changes so far: numbers the ring's state records and their "sound-state" messages. */
+	let states = 0;
+	const reset = () => { sent = 0; marks = []; report = null; writer?.resetQueued(); };
 	return {
 		rate: spec.rate,
 		onState: (state, event) => {
 			if (event === "start" || event === "prepare" || event === "close") reset();
-			post({ t: "sound-state", state, event });
+			const n = states = (states + 1) & 0x7fffffff;
+			// The record first: the owner takes a message without one in the ring for one that did not fit.
+			writer?.writeEvent(n, event);
+			post({ t: "sound-state", state, event, n });
 		},
-		onChunk: spec.chunks ? (chunk: SoundChunk): number => {
+		onChunk: writer ? (chunk: SoundChunk): number => {
+			const woke = writer.write(++seq, chunk.format, chunk.data);
+			if (spec.chunks && woke) post({ t: "sound-wake" });
+			return writer.queuedFrames();
+		} : spec.chunks ? (chunk: SoundChunk): number => {
 			const n = ++seq;
 			post({ t: "sound-chunk", seq: n, format: chunk.format, data: chunk.data }, [chunk.data.buffer as ArrayBuffer]);
 			sent += chunk.frames;
@@ -96,6 +110,7 @@ function soundSink(spec: { rate?: number; chunks: boolean }, post: (msg: FromWor
 			return Math.max(0, report.frames - played) + (sent - report.sentThen);
 		} : undefined,
 		report: (s, frames, at) => {
+			if (writer) return;
 			const i = marks.findIndex(([m]) => m === s);
 			if (i < 0) return; // from an earlier stream
 			report = { frames, at, sentThen: marks[i]![1] };
@@ -449,7 +464,7 @@ export function serveKernel(port: WorkerPort, options: ServeKernelOptions = {}):
 					reject(signal.reason as Error);
 				}, { once: true });
 				try {
-					post({ t: "snapshot-held", id, snapshot: sentSnapshot(snap) }, [snap.memory.buffer as ArrayBuffer]);
+					post({ t: "snapshot-held", id, snapshot: sentSnapshot(snap) }, snapshotTransfer(snap.memory));
 				} catch (e) {
 					commits.delete(id);
 					reject(new Error(`the snapshot could not be posted: ${(e as Error)?.message ?? e}`));
@@ -469,7 +484,7 @@ export function serveKernel(port: WorkerPort, options: ServeKernelOptions = {}):
 			const opts: SnapshotOptions = commit ? { commit, commitTimeoutMs: msg.commitTimeoutMs, ...(hold ? { hold } : {}) } : { stop: msg.stop };
 			if (msg.dropCaches !== undefined) opts.dropCaches = msg.dropCaches;
 			snapshots.set(id, instance.snapshot(opts).then(
-				(snapshot) => commit ? answer({ t: "snapshot-result", id, ok: true }) : answer({ t: "snapshot-result", id, ok: true, snapshot: sentSnapshot(snapshot) }, [snapshot.memory.buffer as ArrayBuffer]),
+				(snapshot) => commit ? answer({ t: "snapshot-result", id, ok: true }) : answer({ t: "snapshot-result", id, ok: true, snapshot: sentSnapshot(snapshot) }, snapshotTransfer(snapshot.memory)),
 				(e) => answer({
 					t: "snapshot-result", id, ok: false, error: (e as Error)?.message ?? String(e),
 					...(e instanceof SnapshotCommitError ? { commitFailed: true, timedOut: e.timedOut } : {}),

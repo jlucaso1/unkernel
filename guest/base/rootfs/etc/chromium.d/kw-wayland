@@ -2,7 +2,9 @@
 # Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 # /etc/chromium.d/kw-wayland (the kw layer): Debian's chromium wrapper
 # sources this. In a Wayland session (in the page every shell has one:
-# kw-wayland.sh) Chromium uses Wayland rather than look for an X display;
+# kw-wayland.sh) Chromium uses Wayland rather than look for an X display,
+# and is dark like the page's desktop (its own UI, and prefers-color-scheme
+# for the pages it shows);
 # and started with neither a Wayland nor an X display (not from a shell,
 # or a machine booted without kw.wayland=1) where the machine can show
 # Wayland windows (/dev/kwshm), it gets wland's session: wland starts the
@@ -14,7 +16,7 @@ if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] && [ -c /dev/kwshm ] &
 	_kw_env=$(/usr/lib/kw/bin/wland 2>/dev/null) && eval "$_kw_env"
 	unset _kw_env
 fi
-[ -z "${WAYLAND_DISPLAY:-}" ] || CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland"
+[ -z "${WAYLAND_DISPLAY:-}" ] || CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland --force-dark-mode"
 # Guest GL's render node is there but not Mesa's EGL, which Debian's chromium
 # does not pull in: its GPU process cannot start and it renders in software.
 if [ -c /dev/dri/renderD128 ] && ! ls /usr/lib/*-linux-gnu/libEGL.so.1 >/dev/null 2>&1; then

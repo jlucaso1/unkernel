@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 /*
  * kw9p: mount a file system the host serves over 9P2000.L on AF_VSOCK
- * (static aarch64 musl), /usr/bin/kw9p in the Alpine initramfs. The host
- * side is js/core/9p.ts (the SDK's vm.mount() and createKernel({ mounts })
- * run kw9p through kwtty).
+ * (static aarch64 musl), `kwbox 9p` in the base's kw layer (kwbox.c).
+ * The host side is js/core/9p.ts (the SDK's vm.mount() and
+ * createKernel({ mounts }) run kw9p through kwtty).
  *
  *   kw9p NAME MOUNTPOINT [ro]
  *
@@ -79,7 +79,7 @@ int main(int argc, char **argv)
 
 	if (argc < 3 || argc > 4 || (argc == 4 && strcmp(argv[3], "ro")) || !*argv[1] ||
 	    strchr(argv[1], ',') || strlen(argv[1]) > 64 || argv[2][0] != '/' || strlen(argv[2]) >= sizeof(path) - 4) {
-		fprintf(stderr, "usage: kw9p NAME MOUNTPOINT [ro]\n");
+		fprintf(stderr, "usage: kwbox 9p NAME MOUNTPOINT [ro]\n");
 		return 2;
 	}
 	name = argv[1];

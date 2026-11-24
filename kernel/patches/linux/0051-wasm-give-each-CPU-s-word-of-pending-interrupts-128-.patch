@@ -1,0 +1,73 @@
+From 2d46ebfca2f3d9bcae3558ffd3efd6df6b914cb7 Mon Sep 17 00:00:00 2001
+From: kernel-wasm <kernel-wasm@localhost>
+Date: Mon, 23 Nov 2026 09:01:35 +0000
+Subject: [PATCH] wasm: give each CPU's word of pending interrupts 128 bytes
+ (SMP)
+
+Compiled user code polls its CPU's word with an atomic load, so that an
+engine cannot hoist the load out of a loop. JavaScriptCore runs a wasm
+atomic load as a read-modify-write, which takes the cache line as a
+store does. The words of two CPUs were 64 bytes apart
+(____cacheline_aligned), on one 128-byte line of Apple's cores, so the
+two took the line from each other at every block: on an iPhone 15 Pro
+atomic loads of adjacent words in four threads ran at 0.26x of one
+thread, and of words on their own pages at 3.3x.
+
+Align the secondaries' words to 128 bytes, and put CPU 0's
+wasm_host_irqs, with padding behind it, into a section of its own.
+---
+ arch/wasm/kernel/irq.c         | 11 +++++++++--
+ arch/wasm/kernel/vmlinux.lds.S |  9 +++++++++
+ 2 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/arch/wasm/kernel/irq.c b/arch/wasm/kernel/irq.c
+index 69ca8bcd6e1..c14aed445bd 100644
+--- a/arch/wasm/kernel/irq.c
++++ b/arch/wasm/kernel/irq.c
+@@ -26,14 +26,21 @@
+ /*
+  * Written by the host (any time the kernel is suspended; on SMP with an
+  * atomic OR, since other CPUs set IPI bits in it too).
++ *
++ * Each CPU's word has 128 bytes to itself (KW_IRQ_WORD_ALIGN): compiled
++ * user code polls its word with an atomic load, which JavaScriptCore runs
++ * as a read-modify-write, so CPUs whose words share a cache line (128
++ * bytes on Apple's cores) would take it from each other at every block.
+  */
+-u32 wasm_host_irqs;
++#define KW_IRQ_WORD_ALIGN	128
++u32 wasm_host_irqs __aligned(KW_IRQ_WORD_ALIGN) __section(".data..kw_irq0");
++static u8 kw_irq0_pad[KW_IRQ_WORD_ALIGN - sizeof(u32)] __used __section(".data..kw_irq0");
+ 
+ #ifdef CONFIG_SMP
+ /* The other CPUs' words (index 0 is unused: CPU 0's is wasm_host_irqs). */
+ static struct {
+ 	u32 pending;
+-} ____cacheline_aligned kw_irq_words[NR_CPUS];
++} __aligned(KW_IRQ_WORD_ALIGN) kw_irq_words[NR_CPUS];
+ 
+ u32 *kw_irq_word_of(int cpu)
+ {
+diff --git a/arch/wasm/kernel/vmlinux.lds.S b/arch/wasm/kernel/vmlinux.lds.S
+index 9385899a494..b8ab97c38d7 100644
+--- a/arch/wasm/kernel/vmlinux.lds.S
++++ b/arch/wasm/kernel/vmlinux.lds.S
+@@ -55,6 +55,15 @@ SECTIONS
+ 	_sdata = .;
+ 	RO_DATA(PAGE_SIZE)
+ 	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_SIZE)
++	/*
++	 * CPU 0's word of pending interrupts and its padding (irq.c). A section
++	 * that no rule here places goes behind _end, into memory that
++	 * setup_arch() gives to the page allocator.
++	 */
++	. = ALIGN(128);
++	.data..kw_irq0 : AT(ADDR(.data..kw_irq0) - LOAD_OFFSET) {
++		*(.data..kw_irq0)
++	}
+ 	_edata = .;
+ 
+ 	EXCEPTION_TABLE(16)
+-- 
+2.56.0
+

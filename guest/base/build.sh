@@ -16,21 +16,26 @@
 #   /kw/lib/sysinit          sysinit of the base shell (etc/inittab)
 #   /kw/layer/              rootfs/: the top lower layer of the root, so
 #                           every distro has it (RAM-resident: keep it
-#                           small): usr/bin/{kwtty,kw9p,kwvsock,kwshm,
-#                           kwwasi,kwcmd} (guest/src/), usr/sbin/kw-overlay,
+#                           small): usr/bin/kwbox (guest/src/kwbox.c: the
+#                           guest tools kwtty, kw9p, kwvsock, kwshm, kwwasi,
+#                           kwcmd (guest/src/) and vtest-bridge
+#                           (gl/bridge/vtest-bridge.c, stream link only, the
+#                           guest GL forwarder that the SDK's `gl` option
+#                           starts) as one program), usr/sbin/kw-overlay,
 #                           usr/lib/kw/ (rc, welcome, net, udhcpc, shutdown,
 #                           data-stop: the runtime a distro's init calls; shrc: the kw-*.sh profile files for
 #                           interactive shells that are not login shells;
-#                           vtest-bridge: gl/bridge/vtest-bridge.c, stream
-#                           link only, the guest GL forwarder that the SDK's
-#                           `gl` option starts; wlandr: wland's relay,
-#                           a release binary pinned in pins.sh, which
-#                           bin/wland starts;
+#                           kwwasi: binfmt_misc's interpreter, a link to kwbox;
 #                           shim and bin/: fx, claude, opencode, node,
 #                           npm, npx, bun, bunx, uv, uvx on first use;
-#                           bin/wland: Wayland apps in the page),
+#                           bin/wland: Wayland apps in the page, through
+#                           the relay the Debian image carries;
+#                           libvulkan_kw.so: guest Vulkan's ICD, vk/icd,
+#                           with usr/share/vulkan/icd.d/kw_icd.json),
 #                           etc/profile.d/{kw-path.sh,kw-term.sh,kw-gl.sh,kw-wayland.sh},
-#                           etc/chromium.d/kw-wayland, the X.Org
+#                           etc/chromium.d/kw-wayland,
+#                           usr/local/bin/Xwayland (the distro's, with a
+#                           pointer on its root window), the X.Org
 #                           fbdev/evdev config, usr/share/licenses/unkernel,
 #                           usr/lib/kw-base (the base's id), and an empty
 #                           /data mount point. Its scripts run the base's
@@ -42,16 +47,11 @@
 # archive (rdinit=/usr/bin/kwtest, abitest, kwbench): base-test.cpio always
 # has them, base.cpio too unless KW_RELEASE=1. Outputs go to
 # vendor/build/initramfs, or to $KW_BASE_OUT (guest/lib/env.sh).
-#
-# KW_WLANDR=<file>: a local static aarch64 wlandr (e.g. a wland checkout's
-# zig-out/release/wlandr-link-linux-arm64) instead of the pinned release's,
-# for development against an unreleased wland (.agents/web.md, Wayland
-# desktop); refused with KW_RELEASE=1.
 set -euo pipefail
 
 . "$(dirname "$0")/../lib/env.sh"     # root, zig, dl, base_out, cc_guest, fetch_verified, need_zig
 . "$guest/lib/stage.sh"               # install_tree
-. "$guest/base/pins.sh"               # BUSYBOX_STATIC_*, WLANDR_*
+. "$guest/base/pins.sh"               # BUSYBOX_STATIC_*
 need_zig
 umask 022
 out="$base_out"
@@ -59,13 +59,6 @@ src="$guest/base"
 mkdir -p "$out" "$dl"
 
 fetch_verified "$BUSYBOX_STATIC_URL" "$dl/$BUSYBOX_STATIC_APK" "$BUSYBOX_STATIC_SHA256"
-if [ -n "${KW_WLANDR:-}" ]; then
-	[ "${KW_RELEASE:-}" != 1 ] || { echo "KW_WLANDR is for development: a release carries the pinned relay (pins.sh)" >&2; exit 1; }
-	[ -f "$KW_WLANDR" ] || { echo "KW_WLANDR=$KW_WLANDR: no such file" >&2; exit 1; }
-	echo "base: wlandr from KW_WLANDR=$KW_WLANDR (not the pinned $WLANDR_VERSION)" >&2
-else
-	fetch_verified "$WLANDR_URL" "$dl/$WLANDR_TARBALL" "$WLANDR_SHA256"
-fi
 stage="$out/base-root"
 rm -rf "$stage" "$out/base-apk"
 mkdir -p "$stage/bin" "$out/base-apk"
@@ -114,20 +107,39 @@ echo hvc0 > "$stage/etc/securetty"
 # the same ones (the top lower layer wins), so they are all 755.
 layer="$stage/kw/layer"
 mkdir -p "$layer"/{data,etc/profile.d,usr/bin,usr/sbin,usr/lib/kw}
-for t in kwvsock kwshm kwtty kw9p kwwasi kwcmd; do
-	"${cc_guest[@]}" -o "$layer/usr/bin/$t" "$guest/src/$t.c"
-	ln -s "/kw/layer/usr/bin/$t" "$stage/usr/bin/$t"   # for the base shell
+# The guest tools as one program, usr/bin/kwbox (guest/src/kwbox.c: one
+# libc for all; `kwbox TOOL ARGS`), each tool's source an object with its
+# main renamed. vtest-bridge is the guest GL forwarder (.agents/gl.md):
+# vtest clients to the host's renderer over kwvsock. binfmt_misc cannot
+# pass a TOOL, so kwwasi has a link of its own (relative: the layer is at
+# / in a distro's root).
+tools=(kwvsock kwshm kwtty kw9p kwwasi kwcmd)
+obj="$out/kwbox-obj"
+objs=()
+rm -rf "$obj"
+mkdir -p "$obj"
+for t in "${tools[@]}"; do
+	"${cc_guest[@]}" -c "-Dmain=${t}_main" -o "$obj/$t.o" "$guest/src/$t.c"
+	objs+=("$obj/$t.o")
 done
-# The guest GL forwarder (.agents/gl.md): vtest clients to the host's renderer over kwvsock.
-"${cc_guest[@]}" -DVTEST_BRIDGE_STREAM_ONLY -o "$layer/usr/lib/kw/vtest-bridge" "$root/gl/bridge/vtest-bridge.c"
-# wland's relay (pins.sh), for /usr/lib/kw/bin/wland: Wayland apps as windows in the page.
-if [ -n "${KW_WLANDR:-}" ]; then
-	cp "$KW_WLANDR" "$layer/usr/lib/kw/wlandr"
-else
-	tar -xzf "$dl/$WLANDR_TARBALL" -O wlandr > "$layer/usr/lib/kw/wlandr"
-fi
-chmod 755 "$layer/usr/lib/kw/wlandr"
+"${cc_guest[@]}" -c -DVTEST_BRIDGE_STREAM_ONLY -Dmain=vtest_bridge_main -o "$obj/vtest-bridge.o" "$root/gl/bridge/vtest-bridge.c"
+"${cc_guest[@]}" -o "$layer/usr/bin/kwbox" "$guest/src/kwbox.c" "${objs[@]}" "$obj/vtest-bridge.o"
+rm -rf "$obj"
+ln -s /kw/layer/usr/bin/kwbox "$stage/usr/bin/kwbox"   # for the base shell
+ln -s ../../bin/kwbox "$layer/usr/lib/kw/kwwasi"
 install_tree "$src/rootfs" "$layer"
+# Guest Vulkan's ICD (vk/icd/build.sh, .agents/vk.md): the Vulkan loader's
+# driver for the SDK's `vk` option, in the layer for the reason vtest-bridge
+# is (its link protocol belongs to the SDK). Its manifest is in the
+# loader's default search path, so a distro's loader (Debian: libvulkan1)
+# finds it with no environment variables. Needs the Vulkan headers on this
+# host; KW_VK=0 leaves it out.
+if [ "${KW_VK:-1}" != 0 ]; then
+	"$root/vk/icd/build.sh" guest >/dev/null
+	install -m 755 "$build/vk/libvulkan_kw.so" "$layer/usr/lib/kw/libvulkan_kw.so"
+	mkdir -p "$layer/usr/share/vulkan/icd.d"
+	install -m 644 "$build/vk/kw_icd.json" "$layer/usr/share/vulkan/icd.d/kw_icd.json"
+fi
 ln -s /kw/layer/usr/sbin/kw-overlay "$stage/usr/sbin/kw-overlay"
 ln -s /kw/layer/usr/lib/kw "$stage/usr/lib/kw"
 find "$stage" -type d -exec chmod go+rx {} +

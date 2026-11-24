@@ -7,9 +7,10 @@
 // ?worker=1 a WorkerKernel, which has no low-level kernel; KW.vm.stats(), KW.vm.evdev,
 // KW.vm.frame() in both),
 // KW.jitStats() (kwemu's JIT counters), the data disk (KW.dataDisk, KW.sync(),
-// KW.exportData(), KW.importData(), KW.resetData()), KW.suspend() (session.ts), the terminal windows (KW.windows:
-// list(), open(), select(), close(), text(), send(); windows.ts), the guest preview (KW.preview: open(), close(), url();
-// preview.ts), the Wayland desktop (KW.wayland: windows(), container(); wayland.ts); KW.kernel and globalThis.kernel (the
+// KW.exportData(), KW.importData(), KW.resetData()), KW.suspend() (session.ts), the terminals (KW.windows, named so
+// for the tests: list(), open(), select(), close(), text(), send(); wterms.ts), the guest preview (KW.preview: open(), close(), url();
+// preview.ts), the Wayland desktop (KW.wayland: windows(), container(); wayland.ts), the window manager (KW.wm: wm.ts,
+// open(), focus(), list()…); KW.kernel and globalThis.kernel (the
 // low-level Kernel, with sendInput(); not in worker mode) and globalThis.term (the wterm WTerm).
 import type { Config } from "./config.ts";
 import type { CowDisk, JitStats, KernelHandle } from "./sdk.ts";
@@ -34,38 +35,42 @@ export interface TermApi {
 	notice(msg: string): void;
 }
 
-/** A terminal window as KW.windows.list() gives it. */
-export interface WindowInfo {
+/** A terminal as KW.windows.list() gives it. */
+export interface TerminalInfo {
 	/** 0: the console (hvc0); 1 to 9: a terminal session over vsock. */
 	n: number;
 	name: string;
-	/** Window 0 is always "open". */
+	/** Terminal 0 is always "open". */
 	state: "opening" | "open" | "ended";
 	current: boolean;
-	/** The shell's pid and pty number in the guest, once open (not for window 0). */
+	/** The shell's pid and pty number in the guest, once open (not for terminal 0). */
 	pid?: number;
 	pts?: number;
 	/** Why it ended, or what it waits for. */
 	note?: string;
+	/** The Terminal window it is a tab of (its WM id, termtabs.ts). */
+	window?: string;
 }
 
-/** The terminal windows (windows.ts), for the shortcuts, the status line and the browser tests. */
-export interface WindowsApi {
-	list(): WindowInfo[];
+/** The terminals (wterms.ts), for the shortcuts, the launcher and the browser tests. */
+export interface TerminalsApi {
+	list(): TerminalInfo[];
 	/**
-	 * Open a window (the lowest free number) and switch to it unless
-	 * select is false; name labels it in the status line (default "sh"),
+	 * Open a terminal (the lowest free number) as a tab of Terminal window
+	 * `window` (its id; "new": a new window; default: the one that last had
+	 * the focus) and switch to it unless select is false; name labels its
+	 * tab (default "tty N"),
 	 * and file and args run in place of the login shell. Resolves once its shell runs; rejects with why it
-	 * could not (the window then stays, showing that, until closed).
+	 * could not (the tab then stays, showing that, until closed).
 	 */
-	open(opts?: { select?: boolean; name?: string; file?: string; args?: string[] }): Promise<WindowInfo>;
-	/** Show window n and give it the keyboard focus (false: there is no such window). */
+	open(opts?: { select?: boolean; name?: string; file?: string; args?: string[]; window?: string }): Promise<TerminalInfo>;
+	/** Show terminal n and give it the keyboard focus (false: there is no such terminal). */
 	select(n: number): boolean;
-	/** Close window n (1 to 9): its shell is hung up. Resolves once it is gone. */
+	/** Close terminal n (1 to 9): its shell is hung up. Resolves once it is gone. */
 	close(n: number): Promise<void>;
-	/** Window n's history and screen as text, a line per row. */
+	/** Terminal n's history and screen as text, a line per row. */
 	text(n: number): string;
-	/** Type into window n (as its terminal does: no Ctrl-key latching). */
+	/** Type into terminal n (as its terminal does: no Ctrl-key latching). */
 	send(n: number, data: string | Uint8Array): void;
 }
 
@@ -103,11 +108,13 @@ export interface KWGlobal {
 	showcase?: { skip(): void; pause(): void; resume(): void };
 	/** The kernel once user space runs (rejects if it never does), once the boot module runs. */
 	ready?: () => Promise<KernelHandle>;
-	/** The terminal windows, once the boot module runs. */
-	windows?: WindowsApi;
+	/** The terminals, once the boot module runs ("windows": the name the browser tests use). */
+	windows?: TerminalsApi;
+	/** The window manager (wm.ts): the desktop's windows, from the start. */
+	wm?: import("./wm.ts").Wm;
 	/** The Wayland desktop (wayland.ts), once the kernel runs: its windows, its container, whether wland is loaded. */
 	wayland?: typeof import("./wayland.ts").waylandApi;
-	/** The guest preview panel (preview.ts): open(port) (false: not a port), close(), and the /vm/ URL of a guest port. */
+	/** The guest preview's Browser window (preview.ts): open(port) opens or focuses it there (false: not a port), close(), and the /vm/ URL of a guest port. */
 	preview?: { open(port?: number | string): boolean; close(): void; url(port: number, path?: string): string };
 	[key: string]: unknown;
 }

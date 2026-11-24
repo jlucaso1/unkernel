@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 /*
  * kwshm: export a shmem file to the host through /dev/kwshm (static aarch64
- * musl), /usr/bin/kwshm in the Alpine initramfs. The SDK's shm test
- * (test/api.test.ts) drives it.
+ * musl), `kwbox shm` in the base's kw layer (kwbox.c). The SDK's shm
+ * test (test/api.test.ts) drives it.
  *
  *   kwshm memfd SIZE [SEED]     a memfd of SIZE bytes filled with the test
  *                               pattern (byte i: x = x * 1103515245 + 12345,
@@ -56,7 +56,7 @@ static int fail(const char *what)
 
 static int usage(void)
 {
-	fprintf(stderr, "usage: kwshm memfd SIZE [SEED] | kwshm export FILE [-u] [-r] [-o OFFSET] [-l LENGTH]\n");
+	fprintf(stderr, "usage: kwbox shm memfd SIZE [SEED] | kwbox shm export FILE [-u] [-r] [-o OFFSET] [-l LENGTH]\n");
 	return 2;
 }
 

@@ -2,17 +2,19 @@
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
 /*
  * kwcmd: run a command the host provides (static aarch64 musl),
- * /usr/bin/kwcmd in the base's kw layer. The reverse of kwtty: there the
- * host runs a guest program, here a guest process stands for a function
- * of the host (js/core/commands.ts: createKernel({ commands }),
- * vm.addCommand()).
+ * `kwbox cmd` in the base's kw layer (kwbox.c, which also runs kwcmd
+ * under any name but its own). The reverse of kwtty: there the host runs
+ * a guest program, here a guest process stands for a function of the host
+ * (js/core/commands.ts: createKernel({ commands }), vm.addCommand()).
  *
- *   NAME [ARG...]            through a link /run/kw/bin/NAME -> /usr/bin/kwcmd
+ *   NAME [ARG...]            through a link /run/kw/bin/NAME -> /usr/bin/kwbox
  *                            (the directory is first on PATH: kw-path.sh,
  *                            kwtty.c): the host's command NAME
- *   kwcmd run NAME [ARG...]  the same without a link
- *   kwcmd sync [NAME...]     make /run/kw/bin hold a link for each NAME and
- *                            no other link to kwcmd (the SDK runs this
+ *   kwbox cmd run NAME [ARG...]
+ *                            the same without a link
+ *   kwbox cmd sync [NAME...]
+ *                            make /run/kw/bin hold a link for each NAME and
+ *                            no other link to kwbox (the SDK runs this
  *                            through kwtty whenever its commands change)
  *
  * This process is the command as far as the guest can tell: its name, its
@@ -81,7 +83,7 @@
 /* The host's port; js/core/commands.ts has it as CMD_PORT. */
 #define KWCMD_PORT	1020
 #define KWCMD_VERSION	1
-#define KWCMD_PATH	"/usr/bin/kwcmd"
+#define KWCMD_PATH	"/usr/bin/kwbox"	/* the links' target: kwbox.c */
 #define KWCMD_DIR	"/run/kw/bin"
 #define NAME_MAX_LEN	64
 
@@ -126,12 +128,12 @@ static void put32(unsigned char *p, uint32_t v)
 	put16(p + 2, v >> 16);
 }
 
-/* A command's name: a file name that is no option and not kwcmd's own. */
+/* A command's name: a file name that is no option and not kwcmd's or kwbox's own. */
 static int valid_name(const char *n)
 {
 	size_t len = strlen(n);
 
-	if (!len || len > NAME_MAX_LEN || n[0] == '.' || n[0] == '-' || !strcmp(n, "kwcmd"))
+	if (!len || len > NAME_MAX_LEN || n[0] == '.' || n[0] == '-' || !strcmp(n, "kwcmd") || !strcmp(n, "kwbox"))
 		return 0;
 	for (; *n; n++)
 		if (!((*n >= 'a' && *n <= 'z') || (*n >= 'A' && *n <= 'Z') || (*n >= '0' && *n <= '9') || strchr("._+-", *n)))
@@ -461,6 +463,6 @@ int main(int argc, char **argv)
 		prctl(PR_SET_NAME, name);
 		return run(argc - 2, argv + 2);
 	}
-	fprintf(stderr, "usage: kwcmd run NAME [ARG...]\n       kwcmd sync [NAME...]\n");
+	fprintf(stderr, "usage: kwbox cmd run NAME [ARG...]\n       kwbox cmd sync [NAME...]\n");
 	return 2;
 }

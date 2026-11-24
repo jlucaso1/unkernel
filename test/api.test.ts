@@ -191,7 +191,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		if (!worker && kernelHasShm) test("shm: no /dev/kwshm without the option", async () => {
 			const { vm, s, waitFor } = k;
 			const at = s.text.length;
-			vm.write("kwshm memfd 4096 < /dev/null; echo rc=$?\n");
+			vm.write("kwbox shm memfd 4096 < /dev/null; echo rc=$?\n");
 			await waitFor(/rc=\d/, at);
 			assert.match(s.text.slice(at), /kwshm: open \/dev\/kwshm: No such device[\s\S]*rc=1/);
 		});
@@ -383,6 +383,65 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		await vm.stop();
 	});
 
+	test("sound: worker mode delivers PCM via SharedArrayBuffer SoundSink.onRing without wake messages (Alpine)", { skip: noAlpine }, async (t) => {
+		let reader: InstanceType<typeof sdk.SoundRingReader> | undefined;
+		let totalFrames = 0;
+		const formats = new Set<string>();
+		const events: string[] = [];
+		/** The ring's records in order: its state records, and "pcm" once per run of chunks. */
+		const records: string[] = [];
+		const fallbackChunks: number[] = [];
+		const drain = (queued: number) => {
+			for (let rec; (rec = reader?.readNext());) {
+				if (rec.event) { records.push(rec.event); continue; }
+				if (records.at(-1) !== "pcm") records.push("pcm");
+				formats.add(`${rec.format.rate}/${rec.format.channels}/${rec.format.format}`);
+				totalFrames += Math.floor(rec.data.length / rec.format.frameBytes);
+				reader!.setQueuedFrames(queued);
+			}
+		};
+		const vm = await boot(t, {
+			worker: true, shared: true, log: () => {}, distro: alpine!,
+			display: () => ({ width: 320, height: 240 }),
+			sound: {
+				rate: 48000,
+				onRing: (ring) => {
+					reader = new sdk.SoundRingReader(ring);
+				},
+				onState: (_st, ev) => {
+					if (ev === "prepare" || ev === "drain" || ev === "stop" || ev === "close") drain(0);
+					events.push(ev);
+				},
+				// Set alongside onRing to verify onRing takes priority over onChunk in shared worker mode.
+				onChunk: (c) => { fallbackChunks.push(c.frames); return 0; },
+			},
+		});
+		assert.ok(reader, "onRing received SharedArrayBuffer on boot");
+		const poll = setInterval(() => drain(64), 20);
+		try {
+			const { s, waitFor } = screen(vm);
+			await waitFor(PROMPT);
+			const at = s.text.length;
+			vm.write("glimmer --test 2\n");
+			await waitFor(/glimmer: test sound done/, at, 30000);
+			await waitFor(PROMPT, s.text.length - 200);
+			await new Promise((r) => setTimeout(r, 150));
+		} finally {
+			clearInterval(poll);
+		}
+		assert.equal(fallbackChunks.length, 0, "onChunk stayed idle when onRing was attached");
+		assert.deepEqual([...formats], ["22050/2/2"]);
+		assert.equal(totalFrames, 66150);
+		assert.deepEqual([events[0], events.at(-1)], ["open", "close"], events.join(","));
+		drain(0);
+		// The ring carries the state changes too, the PCM between its start and the stop or drain.
+		assert.deepEqual(records.filter((r) => r !== "pcm"), events, records.join(","));
+		const pcm = records.indexOf("pcm");
+		assert.ok(pcm > 0 && records[pcm - 1] === "start" && /^(stop|drain)$/.test(records[pcm + 1]!), records.join(","));
+		vm.write("poweroff\n");
+		assert.equal((await vm.exited).code, 0);
+	});
+
 	test("WorkerKernel: sync() is a round trip, and a request the worker never answered resolves false with a persistent disk", async () => {
 		// A stand-in worker: records what is posted, and lets the test answer.
 		type Msg = { t: string; id?: number };
@@ -542,7 +601,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			const { s, waitFor } = screen(vm);
 			await waitFor(PROMPT);
 			const at = s.text.length;
-			vm.write("wget -q -T 3 -O /dev/null http://echo.test/; echo wisp-tried\n");
+			vm.write("/usr/lib/kw/net wait; wget -q -T 3 -O /dev/null http://echo.test/; echo wisp-tried\n"); // the prompt can come before the lease
 			await waitFor(/^wisp-tried/m, at);
 			assert.ok(seen.hosts.includes("echo.test:80"), JSON.stringify(seen));
 			vm.write("poweroff\n");
@@ -557,7 +616,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		const { s, waitFor } = screen(vm);
 		await waitFor(PROMPT);
 		const at = s.text.length;
-		vm.write("wget -q -O - http://example.com/ | grep -o '<title>.*</title>'; echo wisp-done\n");
+		vm.write("/usr/lib/kw/net wait; wget -q -O - http://example.com/ | grep -o '<title>.*</title>'; echo wisp-done\n");
 		await waitFor(/wisp-done/, at, 90000);
 		assert.match(s.text.slice(at), /<title>Example Domain<\/title>/, logs.join("\n"));
 		vm.write("poweroff\n");
@@ -581,7 +640,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			return n;
 		})();
 		const at = s.text.length;
-		vm.write(`dd if=/dev/zero bs=65536 count=${SIZE / 65536} 2>/dev/null | kwvsock connect 5000; echo rc=$?\n`);
+		vm.write(`dd if=/dev/zero bs=65536 count=${SIZE / 65536} 2>/dev/null | kwbox vsock connect 5000; echo rc=$?\n`);
 		await waitFor(/rc=0/, at, 30000);
 		assert.equal(await got, SIZE);
 		l.close();
@@ -631,7 +690,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 				const { vm, s, waitFor } = k;
 				await waitFor(PROMPT);
 				const at = s.text.length;
-				vm.write(`wget -q -O - http://10.0.2.2:${port}/ && echo fetch-ok\n`);
+				vm.write(`/usr/lib/kw/net wait; wget -q -O - http://10.0.2.2:${port}/ && echo fetch-ok\n`); // the prompt can come before the lease
 				await waitFor(/hello from the host[\s\S]*fetch-ok/, at);
 				if (net instanceof NetStack) assert.ok(net.stats.tcpOpened >= 1);
 				else {
@@ -674,7 +733,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 				return { n, sum: hash.digest("hex"), closed: await c.closed };
 			})();
 			let at = s.text.length;
-			vm.write(`head -c ${SIZE} /dev/urandom > /tmp/blob; kwvsock connect 5000 < /tmp/blob > /tmp/back; echo rc=$?; sha256sum /tmp/blob /tmp/back\n`);
+			vm.write(`head -c ${SIZE} /dev/urandom > /tmp/blob; kwbox vsock connect 5000 < /tmp/blob > /tmp/back; echo rc=$?; sha256sum /tmp/blob /tmp/back\n`);
 			await waitFor(/rc=\d+[\s\S]*\/tmp\/back/, at, 120000);
 			const out1 = s.text.slice(at);
 			assert.match(out1, /rc=0/, out1);
@@ -689,7 +748,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			// 2. The host connects to a guest listener and sends 4 MiB; the guest has already
 			// sent its reply and shut down its side (a half-close), so the host reads it, then EOF.
 			at = s.text.length;
-			vm.write("echo reply-$((6*7)) > /tmp/reply; kwvsock listen 5001 < /tmp/reply > /tmp/in; echo rc=$?; sha256sum /tmp/in\n");
+			vm.write("echo reply-$((6*7)) > /tmp/reply; kwbox vsock listen 5001 < /tmp/reply > /tmp/in; echo rc=$?; sha256sum /tmp/in\n");
 			await waitFor(/kwvsock: listening on port 5001/, at);
 			const data = new Uint8Array(SIZE);
 			for (let i = 0, x = 12345; i < SIZE; i++) data[i] = (x = (x * 1103515245 + 12345) >>> 0) >>> 24;
@@ -713,7 +772,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			// 3. Refused both ways, and a reset by the host while the guest sends.
 			await assert.rejects(v.connect(5999), (e: Error & { code?: string }) => e.name === "VsockError" && e.code === "ECONNREFUSED");
 			at = s.text.length;
-			vm.write("kwvsock connect 5002 < /dev/null; echo rc=$?\n");
+			vm.write("kwbox vsock connect 5002 < /dev/null; echo rc=$?\n");
 			await waitFor(/rc=\d/, at);
 			assert.match(s.text.slice(at), /kwvsock: connect: Connection reset by peer[\s\S]*rc=1/);
 			let resetClosed: Promise<string> | undefined;
@@ -727,7 +786,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 				})();
 			});
 			at = s.text.length;
-			vm.write("yes | kwvsock connect 5003 > /dev/null; echo rc=$?\n");
+			vm.write("yes | kwbox vsock connect 5003 > /dev/null; echo rc=$?\n");
 			await waitFor(/rc=\d/, at);
 			assert.match(s.text.slice(at), /kwvsock: send: Broken pipe[\s\S]*rc=1/);
 			assert.equal(await resetClosed, "reset");
@@ -806,7 +865,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			// 4. A memfd the guest exports through /dev/kwshm; the host opens it by id.
 			const MFD = 3000000;
 			let at = s.text.length;
-			vm.write(`kwshm memfd ${MFD} 7\n`);
+			vm.write(`kwbox shm memfd ${MFD} 7\n`);
 			await waitFor(/kwshm: id=(\d+) size=(\d+) pages=(\d+) fnv=([0-9a-f]{8})/, at);
 			const [, idS, sizeS, pagesS, fnvS] = s.text.slice(at).match(/kwshm: id=(\d+) size=(\d+) pages=(\d+) fnv=([0-9a-f]{8})/)!;
 			assert.deepEqual([Number(sizeS), Number(pagesS)], [MFD, Math.ceil(MFD / 4096)]);
@@ -839,7 +898,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			rangedSha.update((await rangedHost.read()).subarray(8192, 8192 + 50000));
 			await rangedHost.close();
 			at = s.text.length;
-			vm.write("kwshm export /dev/shm/ranged -u -r -o 8192 -l 50000\n");
+			vm.write("kwbox shm export /dev/shm/ranged -u -r -o 8192 -l 50000\n");
 			await waitFor(/kwshm: id=(\d+) size=50000 pages=13 /, at);
 			const ranged = await shm.openId(Number(s.text.slice(at).match(/kwshm: id=(\d+) size=50000/)![1]));
 			assert.deepEqual({ size: ranged.size, writable: ranged.writable }, { size: 50000, writable: false });
@@ -953,7 +1012,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		/** Start kwshm.c on a memfd of `size` bytes (pattern `seed`); its export's id. */
 		const memfd = async (size: number, seed: number) => {
 			const from = s.text.length;
-			vm.write(`kwshm memfd ${size} ${seed}\n`);
+			vm.write(`kwbox shm memfd ${size} ${seed}\n`);
 			await waitFor(/kwshm: id=(\d+) size=/, from);
 			return Number(s.text.slice(from).match(/kwshm: id=(\d+) size=/)![1]);
 		};
@@ -1541,7 +1600,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			};
 			return { srv, connect };
 		};
-		const relays = async () => (await k.vm.exec("sh", ["-c", "ps -o args | grep -c '[k]wtty serve'"])).stdout.trim();
+		const relays = async () => (await k.vm.exec("sh", ["-c", "ps -o args | grep -c '[k]wbox tty serve'"])).stdout.trim();
 
 		test("connect(): an echo server, half-close, 1 MiB each way under credit; a refused port is ECONNREFUSED; close() of an idle connection ends the guest's relay", async () => {
 			const { srv, connect } = await guestServer(7000, ["cat"]);
@@ -1659,7 +1718,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 
 		test("exec() waits for createKernel's commands: arguments, environment, cwd, stdout and the exit status; a link per command, first on PATH", async () => {
 			const r = await sh("cd /tmp && FOO=bar hello a 'b c'; echo rc=$?; command -v hello; readlink /run/kw/bin/hello; ls /run/kw/bin | tr '\\n' ' '");
-			assert.equal(r.stdout, "hello a,b c\nrc=0\n/run/kw/bin/hello\n/usr/bin/kwcmd\nask big boom die first hang hello noawait upper ");
+			assert.equal(r.stdout, "hello a,b c\nrc=0\n/run/kw/bin/hello\n/usr/bin/kwbox\nask big boom die first hang hello noawait upper ");
 			const call = seen.pop() as Record<string, unknown>;
 			assert.ok((call.pid as number) > 1);
 			assert.deepEqual({ ...call, pid: 0 }, { args: ["a", "b c"], cwd: "/tmp", uid: 0, tty: { stdin: false, stdout: false, stderr: false }, foo: "bar", pid: 0 });
@@ -1705,8 +1764,8 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			await p.close();
 		});
 
-		test("a name the host does not have (127), kwcmd run, addCommand() and removeCommand(), bad names", async () => {
-			const r = await sh("ln -s /usr/bin/kwcmd /tmp/nope; /tmp/nope; echo rc=$?; kwcmd run hello via-run");
+		test("a name the host does not have (127), kwbox cmd run, addCommand() and removeCommand(), bad names", async () => {
+			const r = await sh("ln -s /usr/bin/kwbox /tmp/nope; /tmp/nope; echo rc=$?; kwbox cmd run hello via-run");
 			assert.deepEqual(r, { stdout: "rc=127\nhello via-run\n", stderr: "nope: the host does not provide this command\n", exitCode: 0, signal: null });
 			await k.vm.addCommand("late", () => 7);
 			assert.equal((await sh("late; echo rc=$?")).stdout, "rc=7\n");
@@ -1715,7 +1774,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 			await k.vm.removeCommand("late");
 			assert.equal((await sh("late 2>/dev/null; echo rc=$?; ls /run/kw/bin | wc -l")).stdout, "rc=127\n9\n");
 			assert.ok(!k.vm.commands.has("late"));
-			for (const bad of ["", "a/b", ".x", "-x", "kwcmd", "a b"])
+			for (const bad of ["", "a/b", ".x", "-x", "kwcmd", "kwbox", "a b"])
 				await assert.rejects(k.vm.addCommand(bad, () => 0), (e: Error) => e instanceof sdk.CommandError && e.code === "EINVAL", bad);
 		});
 	});
@@ -1730,11 +1789,11 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		const alp = sharedKernel(() => ({ distro: alpine!, log: () => {}, commands: { whoru: (c) => `uid ${c.uid}\n` } }));
 
 		test("boots the Alpine image under the overlay root, with the kw layer on top", async () => {
-			const r = await alp.vm.exec("sh", ["-c", "cat /etc/alpine-release /usr/lib/kw-distro; apk --version; grep ' / ' /proc/self/mounts; command -v kwtty"]);
+			const r = await alp.vm.exec("sh", ["-c", "cat /etc/alpine-release /usr/lib/kw-distro; apk --version; grep ' / ' /proc/self/mounts; command -v kwbox"]);
 			assert.equal(r.exitCode, 0, r.stderr);
 			assert.match(r.stdout, /^\d+\.\d+\.\d+\nalpine\napk-tools \S+/);
 			assert.match(r.stdout, /^overlay \/ overlay .*lowerdir=\/kw\/layer:\/kw\/distro/m);
-			assert.match(r.stdout, /\/usr\/bin\/kwtty$/m);
+			assert.match(r.stdout, /\/usr\/bin\/kwbox$/m);
 			assert.equal(alp.vm.distro?.label, "kwroot");
 		});
 
@@ -1867,7 +1926,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		void new Response(sub.stdout).arrayBuffer().catch(() => {});
 		void new Response(sub.stderr).arrayBuffer().catch(() => {});
 		const l = vm.vsock!.listen(5005);
-		vm.write("kwvsock connect 5005 </dev/null >/tmp/vs.out 2>&1 & echo vs-started\n");
+		vm.write("kwbox vsock connect 5005 </dev/null >/tmp/vs.out 2>&1 & echo vs-started\n");
 		await a.waitFor(/vs-started/);
 		const conn = (await l.accept())!;
 		// snapshot() refuses while vsock packets are in flight (the accept's and kwtty's last ones may still be), and the guest goes on.
@@ -2131,7 +2190,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		await assert.rejects(boot(t, { kernel: module, vsock: false, restore: snap, disks: [disk()], log: () => {} }), /was written after the snapshot/);
 	});
 
-	test("worker mode: snapshot() in the worker, resumed inline and in a worker (transferRestore detaches the memory)", async (t) => {
+	test("worker mode: snapshot() in the worker, resumed inline and in a worker (a 2 GiB memory is shared, not detached)", async (t) => {
 		const vm = await boot(t, { worker: true, vsock: false, log: () => {} });
 		assert.ok(vm instanceof sdk.WorkerKernel);
 		const a = screen(vm);
@@ -2141,6 +2200,7 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		const snap = await vm.snapshot({ stop: true });
 		assert.equal((await vm.exited).kind, "stopped");
 		assert.equal(snap.memory.byteLength, 2048 * 1048576, "the memory came across");
+		assert.ok(snap.memory.buffer instanceof SharedArrayBuffer, "a memory of 2 GiB is shared (Chrome posts no plain ArrayBuffer that large)");
 
 		const vm2 = await boot(t, { vsock: false, restore: snap, log: () => {} });
 		assert.ok(vm2 instanceof sdk.KernelInstance);
@@ -2150,12 +2210,26 @@ describe("api", { concurrency: CONCURRENCY }, () => {
 		await vm2.stop({ reason: "test" });
 
 		const vm3 = await boot(t, { worker: true, vsock: false, restore: snap, transferRestore: true, log: () => {} });
-		assert.equal(snap.memory.byteLength, 0, "transferRestore handed the buffer over");
+		assert.equal(snap.memory.byteLength, 2048 * 1048576, "a shared memory is posted as it is");
 		const c = screen(vm3);
 		vm3.write("echo worker-$X\n");
 		await c.waitFor(/worker-w-kept/);
 		vm3.write("poweroff\n");
 		assert.equal((await vm3.exited).code, 0);
+	});
+
+	test("worker mode: transferRestore detaches a memory under 2 GiB", async (t) => {
+		const vm = await boot(t, { worker: true, vsock: false, memoryMiB: 512, log: () => {} });
+		await screen(vm).waitFor(PROMPT);
+		const snap = await vm.snapshot({ stop: true });
+		assert.ok(snap.memory.buffer instanceof ArrayBuffer && snap.memory.byteLength === 512 * 1048576, "a plain memory came across");
+		const vm2 = await boot(t, { worker: true, vsock: false, restore: snap, transferRestore: true, log: () => {} });
+		assert.equal(snap.memory.byteLength, 0, "transferRestore handed the buffer over");
+		const b = screen(vm2);
+		vm2.write("echo back-$((6*7))\n");
+		await b.waitFor(/back-42/);
+		vm2.write("poweroff\n");
+		assert.equal((await vm2.exited).code, 0);
 	});
 
 	test("worker mode: snapshot() with a data disk, resumed in a worker and saved again, then inline; refused once the disk changed", async (t) => {
@@ -2721,4 +2795,61 @@ test("worker mode: messages where SharedArrayBuffer cannot be used (a page that 
 		delete g.crossOriginIsolated;
 	}
 	assert.equal(sdk.sharedMemoryAvailable(), true);
+});
+
+test("sound ring: the owner delivers states and PCM in the kernel's order, whatever the messages' timing", async () => {
+	const { SoundBridge } = await import("../js/core/worker-devices.ts");
+	const { SoundRingWriter, createSoundRing } = await import("../js/core/sound-ring.ts");
+	const fmt = (rate: number) => ({ rate, channels: 2, format: 2, frameBytes: 4 });
+	const ring = createSoundRing(1024);
+	const writer = new SoundRingWriter(ring);
+	const seen: string[] = [];
+	const logs: string[] = [];
+	const bridge = new SoundBridge({
+		onChunk: (c) => { seen.push(`pcm${c.format.rate}`); return 100; },
+		onState: (_s, ev) => { seen.push(ev); },
+	}, () => {}, (m) => logs.push(m), ring);
+	const st = { open: true, playing: false, format: null };
+	// The worker's side: a record per state, then its message (delivered late, in `msgs`).
+	const msgs: Array<() => void> = [];
+	let n = 0;
+	const state = (ev: "open" | "prepare" | "start" | "stop" | "close") => {
+		const k = ++n;
+		writer.writeEvent(k, ev);
+		msgs.push(() => bridge.onState(st, ev, k));
+	};
+	const pcm = (rate: number) => { if (writer.write(1, fmt(rate), new Uint8Array(64))) msgs.push(() => bridge.onWake()); };
+	state("open"); state("prepare"); state("start"); pcm(48000);
+	// The owner is behind: the next stream is in the ring before it has handled the first one's messages.
+	state("stop"); state("prepare"); state("start"); pcm(8000);
+	assert.equal(writer.queuedFrames(), 32, "frames in the ring count as delay");
+	for (const m of msgs.splice(0)) m();
+	assert.deepEqual(seen, ["open", "prepare", "start", "pcm48000", "stop", "prepare", "start", "pcm8000"]);
+	assert.equal(writer.queuedFrames(), 100, "the sink's answer, nothing left in the ring");
+	// A full ring: PCM is dropped and logged, the states still arrive, in order.
+	seen.length = 0;
+	for (let i = 0; i < 20; i++) pcm(8000);
+	state("stop"); state("close");
+	for (const m of msgs.splice(0)) m();
+	assert.deepEqual(seen.slice(-2), ["stop", "close"]);
+	assert.ok(seen.length < 22 && seen.slice(0, -2).every((x) => x === "pcm8000"), seen.join(","));
+	assert.match(logs.join("\n"), /sound ring was full: \d+ bytes/);
+});
+
+test("yieldToEventLoop() resolves concurrently and across turns without setImmediate", async () => {
+	const { yieldToEventLoop } = await import("../js/core/wasi.ts");
+	const g = globalThis as { setImmediate?: typeof setImmediate };
+	const orig = g.setImmediate;
+	g.setImmediate = undefined;
+	try {
+		const order: number[] = [];
+		await Promise.all([
+			yieldToEventLoop().then(() => order.push(1)),
+			yieldToEventLoop().then(() => order.push(2)),
+			yieldToEventLoop().then(() => yieldToEventLoop()).then(() => order.push(3)),
+		]);
+		assert.deepEqual(order, [1, 2, 3]);
+	} finally {
+		g.setImmediate = orig;
+	}
 });

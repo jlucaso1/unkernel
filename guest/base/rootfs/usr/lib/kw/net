@@ -4,10 +4,31 @@
 # /usr/lib/kw/net (the kw layer): the network, with the base's busybox: lo,
 # and eth0 by DHCP when the host provides kwnet (js/core/net.ts); the lease
 # is applied by /usr/lib/kw/udhcpc.
+# "net background" (the base shell's sysinit, Debian's kw-init) brings the
+# links up and leaves DHCP to a job that holds /run/kw-net.lock until it
+# ends, so the boot goes on meanwhile; that job's failure goes to
+# /run/kw-net.msg, not to the console, where the prompt may be by then.
+# "net wait" returns once that job has ended (at once without one), and
+# with its failure prints the message and exits 1.
 
 PATH=/run/kw-lower/bin
+lock=/run/kw-net.lock msg=/run/kw-net.msg
+if [ "$1" = wait ]; then
+	[ ! -e $lock ] || flock -s $lock true
+	[ -s $msg ] || exit 0
+	cat $msg >&2
+	exit 1
+fi
 ip link set lo up
 [ -e /sys/class/net/eth0 ] || exit 0
 ip link set eth0 up
-udhcpc -i eth0 -s /usr/lib/kw/udhcpc -q -n -t 3 -T 1 >/dev/null 2>&1 || echo "kw-net: no DHCP lease on eth0"
+dhcp() { udhcpc -i eth0 -s /usr/lib/kw/udhcpc -q -n -t 3 -T 1 >/dev/null 2>&1; }
+if [ "$1" = background ]; then
+	# Locked before this returns; the job inherits the lock with fd 9.
+	exec 9> $lock
+	flock 9
+	{ dhcp || echo "kw-net: no DHCP lease on eth0" > $msg; } < /dev/null > /dev/null 2>&1 &
+	exit 0
+fi
+dhcp || echo "kw-net: no DHCP lease on eth0"
 exit 0

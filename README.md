@@ -59,7 +59,7 @@ add python3` about 3.4 s. [Benchmarks](#-benchmarks) has the full numbers.
 Anything a program relies on, from `/proc` and `epoll` to cgroups and
 overlayfs, behaves as it does on a server, because it runs the same code.
 
-- **A real MMU** (`arch/wasm` with Sv39 page tables): `fork`, `mmap`,
+- **A real MMU** (`arch/wasm` with Sv48 page tables): `fork`, `mmap`,
   copy-on-write, shared memory, threads and signals behave as they do on
   hardware. This is not a NOMMU port where programs are limited to `vfork`.
 - **Linux's own file systems**: ext4, overlayfs, tmpfs, loop devices, FUSE,
@@ -119,11 +119,16 @@ overlayfs, behaves as it does on a server, because it runs the same code.
 
 ## 🌐 Try it in the browser
 
-Open **[unkernel.dev](https://unkernel.dev/)**. A shell appears
-after a download of about 10 MB. Your changes are saved in the browser, and
-the status icon opens options, diagnostics, and export or reset for your
-disk. Ctrl-A n (or ⌘A n on a Mac) or `+` on the status line opens another
-terminal window with its own shell, up to 9; Ctrl-A and a digit switches.
+Open **[unkernel.dev](https://unkernel.dev/)**. A desktop appears after a
+download of about 10 MB, with a shell in its Terminal window. Your changes
+are saved in the browser. The Dock opens the apps (so do ⌘K on a Mac and
+Ctrl-Shift-O elsewhere); Settings has the options and export or reset for
+your disk, System the diagnostics. Ctrl-A n (or ⌘A n on a Mac) or `+` on
+a Terminal window's tabs opens another terminal with its own shell, up to
+9; Ctrl-A and a digit switches, and Ctrl-A ? lists every shortcut. The
+wallpaper is a random photo from [Lorem Picsum](https://picsum.photos/)
+by default, so the page fetches one from picsum.photos on every load;
+the built-in wallpaper or a preset (Settings > Desktop) stops that.
 
 The page takes a few URL parameters:
 
@@ -136,13 +141,13 @@ The page takes a few URL parameters:
 | `?jit=0` | Interpreter only |
 | `?data=0` | No persistent disk, a fresh system every time |
 | `?worker=0` | Run the kernel on the page's thread (default: in a Web Worker where the page is cross-origin isolated) |
-| `?cpus=2` | Boot on that many CPUs, each in a Web Worker (default: half the device's threads, up to 4 on desktops and 2 in Firefox, one on phones, in Safari and on iOS, where the page has the SMP kernel and is cross-origin isolated; `?cpus=1`: one CPU) |
+| `?cpus=2` | Boot on that many CPUs, each in a Web Worker (default: half the device's threads, up to 4 on desktops and 2 in Firefox and on phones, where the page has the SMP kernel and is cross-origin isolated; `?cpus=1`: one CPU) |
 | `?gl=0` | No guest GL (on by default on Debian: the guest's Mesa renders through your browser's WebGL2, see below) |
 
-On Debian the guest gets a GPU (`/dev/dri`, Options, Guest GL): Mesa's
+On Debian the guest gets a GPU (`/dev/dri`, Settings, Guest GL): Mesa's
 virgl driver draws through your browser's WebGL2. The renderer behind it
-is downloaded only when a guest program first uses GL; the status panel's
-Guest GL row then names the GPU (a software renderer such as SwiftShader
+is downloaded only when a guest program first uses GL; the Guest GL row
+in System > Environment then names the GPU (a software renderer such as SwiftShader
 is flagged). Mesa is installed in the guest, not shipped:
 
 ```sh
@@ -156,9 +161,9 @@ xvfb-run -a -s "-screen 0 640x480x24" glmark2-es2   # frame rates
 Wayland apps show as windows on the page: `wland foot` (or the
 launcher's foot tile) starts wland's relay in the guest and runs the app
 against it; [wland](https://github.com/pithings/wland)'s compositor runs in
-the page and reads the app's pixels straight from guest memory. The status
-line's desktop icon (Ctrl-A w) switches between the windows and the
-terminal.
+the page and reads the app's pixels straight from guest memory. Each app
+window is a window of the page's desktop; Ctrl-A w switches between them
+and the other windows.
 
 ```sh
 sudo apt-get install -y foot fonts-dejavu-core
@@ -283,7 +288,8 @@ well behind native.
 - No IPv6, no UDP beyond DHCP and DNS, no inbound network connections
   ([`vm.connect()`, `vm.fetch()`](#talk-over-vsock) and `--forward` reach
   guest servers over vsock instead).
-- No ptrace register sets, so `strace` and `gdb` don't work. No seccomp.
+- No hardware breakpoints or watchpoints: `gdb`'s watchpoints are
+  software ones, which single-step the program.
 - Code that runs only a few times (a large program's startup, such as
   `npm`'s) stays on the interpreter, and FP and AdvSIMD floating point
   run through it even inside compiled code. Without wasm SIMD in the host
@@ -444,7 +450,7 @@ host change shows in the guest within a second.
 
 ```js
 const listener = vm.vsock.listen(5000);          // guest programs connect to CID 2, port 5000
-vm.write("echo hello | kwvsock connect 5000\n");
+vm.write("echo hello | kwbox vsock connect 5000\n");
 const conn = await listener.accept();
 console.log(await new Response(conn.readable).text());   // "hello\n"
 conn.close();
@@ -553,6 +559,23 @@ if (vm.gl.gpu.drawFrame(ctx) === null) { /* show vm.frame() as above */ }
 vm.updateDisplaySize({ width: 1600, height: 900 });
 ```
 
+### Vulkan in the guest (browsers with WebGPU)
+
+```js
+const vm = await createKernel({ distro: "/distros/debian.erofs", vk: true });
+await vm.exec("sudo", ["apt-get", "install", "-y", "libvulkan1", "vulkan-tools"]);
+const r = await vm.exec("vulkaninfo", ["--summary"]);   // deviceName = kwvk (WebGPU)
+```
+
+The base carries a Vulkan driver (an ICD the Vulkan loader finds by
+itself) that sends the guest's Vulkan calls to a renderer on the page's
+WebGPU device; SPIR-V shaders become WGSL through `kwvk-naga.wasm`.
+Nothing loads before the guest's first Vulkan program (`vm.vk.status`).
+Vulkan 1.2 with Wayland, X11 and headless presentation (frames come back
+by readback); vkcube, vkmark, SDL's GPU API and GTK 4's Vulkan renderer run
+on it. Node has no WebGPU, so there `vk` is ignored with a log line.
+[vk/PROTOCOL.md](vk/PROTOCOL.md) has the design.
+
 ### Run it in a worker
 
 ```js
@@ -655,8 +678,24 @@ Thanks to:
   patches and the Kbuild toolchain wrapper.
 - [iSH](https://github.com/ish-app/ish) and [v86](https://github.com/copy/v86),
   for showing how to build a fast user-mode emulator and a wasm JIT.
-- [Alpine Linux](https://alpinelinux.org/), [wterm](https://wterm.dev/) and
-  [Binaryen](https://github.com/WebAssembly/binaryen).
+- [virglrenderer](https://gitlab.freedesktop.org/virgl/virglrenderer) and
+  [Mesa](https://mesa3d.org/), for guest GL: Mesa's virgl driver in the
+  guest, and virglrenderer compiled to wasm with
+  [Emscripten](https://emscripten.org/), rendering on WebGL2 in the page.
+- [Alpine Linux](https://alpinelinux.org/) and
+  [Debian](https://www.debian.org/), the distributions it boots, packed with
+  [erofs-utils](https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git),
+  [LZ4](https://github.com/lz4/lz4) and [Zstandard](https://github.com/facebook/zstd).
+- [wland](https://github.com/pithings/wland), the Wayland compositor that
+  brings the guest's windows to the page, and [wterm](https://wterm.dev/),
+  the page's terminals.
+- [Zig](https://ziglang.org/), [LLVM](https://llvm.org/) and
+  [Binaryen](https://github.com/WebAssembly/binaryen), which build it;
+  [React](https://react.dev/), [Tailwind CSS](https://tailwindcss.com/),
+  [Vite](https://vite.dev/), [Nitro](https://nitro.build/) and the
+  [Geist](https://vercel.com/font) fonts, which make the page.
+- [Wisp](https://github.com/MercuryWorkshop/wisp-protocol), the protocol
+  behind the guest's network in the browser.
 
 ## 📄 License
 
@@ -670,7 +709,13 @@ otherwise. The JavaScript SDK and page (`js/`, `web/`, SDK tests) are MIT
 
 The npm package ships a Linux kernel (GPL-2.0) with a small base system
 (Alpine's static busybox, GPL-2.0, and unkernel's own tools), so it is `MIT
-AND GPL-2.0-only`. The distro images it downloads hold the distributions'
+AND GPL-2.0-only`. It also ships the guest GL renderer (`virgl.wasm`:
+virglrenderer and Emscripten's runtime, MIT, with unkernel's glue,
+GPL-2.0-or-later) and the guest Vulkan translator (`kwvk-naga.wasm`: naga
+and its Rust dependencies, MIT or Apache-2.0, with unkernel's glue,
+GPL-2.0-or-later). [THIRD-PARTY.md](THIRD-PARTY.md), in the package and on
+the page at `/licenses.md`, lists what is not unkernel's, with the notices
+its licenses ask for. The distro images it downloads hold the distributions'
 packages, which keep their own licenses. The
 kernel's source is Linux 7.3.4 plus
 [kernel/patches/linux](kernel/patches/linux) (`arch/wasm` is based on

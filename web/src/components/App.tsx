@@ -1,43 +1,43 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Pooya Parsa <pooya@pi0.io>
-// The page: the stage (the terminal, the splash card) with the guest preview
-// panel docked right of it, the key bar, the status line at the bottom, the
-// guest's display over the stage (or over all of them, rotated), the Wayland
-// desktop over the stage (Desktop.tsx), and over them the
-// dialog, the paste dialog and the toast. Also the page-wide behaviour: the keyboard
-// shortcuts (shortcuts.ts), following the visual viewport (the on-screen
+// The page: the desktop (#desktop: its workspace, Workspace.tsx, holds the window manager's
+// windows: the terminals, the guest preview's Browser window, wm.ts) on the
+// wallpaper (Wallpaper.tsx, under everything in #app), the top bar (TopBar.tsx: the menus, the status icons, the
+// clock), the key bar, the Dock at the bottom (Dock.tsx), the layer the guest's display window may
+// cover the page with on phones (Display.tsx), and over
+// them the paste dialog and the toast; the boot shows in the top bar
+// (BootIndicator.tsx) and in the console's window (#app's data-blank: its
+// placeholder until the first line); the system apps
+// (Settings and System, sysapps.ts) and the Wayland apps (wayland.ts) are windows like the terminals. Also the page-wide behaviour: the keyboard
+// shortcuts (keys.ts; the HUD that shows them while the prefix is armed, KeysHud.tsx), following the visual viewport (the on-screen
 // keyboard), when the key bar shows, and the pinch that sets the font size
 // on phones.
-import { memo, useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { trackBottom } from "../bottom.ts";
-import { setStage } from "../display.ts";
 import { KW } from "../kw.ts";
-import { installShortcuts } from "../shortcuts.ts";
+import { installShortcuts } from "../keys.ts";
 import { ui$, useStore } from "../store.ts";
-import { Bar } from "./Bar.tsx";
-import { Desktop } from "./Desktop.tsx";
+import { terminalHasFocus } from "../termtabs.ts";
+import { useWm } from "../wm.ts";
+import { Dock } from "./Dock.tsx";
 import { Display } from "./Display.tsx";
 import { Keys } from "./Keys.tsx";
+import { KeysHud } from "./KeysHud.tsx";
 import { Launchpad } from "./Launcher.tsx";
-import { Confirm, PasteDialog, ResumeCard, Splash, Toast } from "./Overlays.tsx";
-import { Panel } from "./Panel.tsx";
-import { Preview } from "./Preview.tsx";
-
-/**
- * The terminals' hosts. #term is window 0's (boot.ts): wterm renders the
- * rows as DOM text in it, which is also the scroll container, and sets its
- * own class. windows.ts adds the other windows to #terms, each over the
- * same box. React renders these once and never touches them again.
- */
-const TermHost = memo(() => <div id="terms" className="relative h-full w-full"><div id="term" /></div>);
+import { useBlank } from "./BootIndicator.tsx";
+import { Confirm, PasteDialog, ResumeCard, Toast } from "./Overlays.tsx";
+import { Apps } from "./Apps.tsx";
+import { TopBar } from "./TopBar.tsx";
+import { Wallpaper } from "./Wallpaper.tsx";
+import { Workspace } from "./Workspace.tsx";
 
 export function App() {
 	const cfg = KW.config;
 	const state = useStore((s) => s.state);
+	const blank = useBlank();
+	const compact = useWm((s) => s.compact);
 	const app = useRef<HTMLDivElement>(null);
-	const [stage, setStageEl] = useState<HTMLElement | null>(null);
 
-	useEffect(() => setStage(stage), [stage]);
 	useViewport(app);
 	useKeyBar(cfg.mobile);
 	usePinchFont(cfg.mobile);
@@ -46,26 +46,29 @@ export function App() {
 
 	return (
 		<>
-			<div id="app" ref={app} data-state={state} className={`fixed inset-x-0 top-0 flex h-dvh flex-col ${cfg.mobile ? "mobile" : ""}`}>
-				{/* The stage, and the preview docked right of it (it takes part of the stage's width). */}
+			<div id="app" ref={app} data-state={state} data-blank={blank} className={`fixed inset-x-0 top-0 flex h-dvh flex-col ${cfg.mobile ? "mobile" : ""} ${compact ? "compact" : ""}`}>
+				{/* Out of the flow, under the rest (the default wallpaper is #app's own background). */}
+				<Wallpaper />
+				{/* The desktop: the windows. */}
 				<div className="relative flex min-h-0 flex-1">
-					<main id="stage" ref={setStageEl} className="relative min-h-0 min-w-0 flex-1 pt-[max(8px,var(--st))] pr-[max(12px,var(--sr))] pb-1 pl-[max(12px,var(--sl))]">
-						<TermHost />
-						<Splash />
+					<main id="desktop" className="relative min-h-0 min-w-0 flex-1">
+						<Workspace />
 					</main>
-					<Preview />
-					{/* Over the stage and whatever window is shown on it: the display (z-10), the preview (z-15). */}
+					{/* Over the desktop and whatever window is shown on it. */}
 					<ResumeCard />
 				</div>
 				<Keys />
-				<Bar />
-				{/* Over the stage, or rotated over the whole page (status line included). */}
-				<Display stage={stage} />
-				{/* The Wayland desktop, over the stage and the display while shown. */}
-				<Desktop stage={stage} />
+				<Dock />
+				{/* Across the top, over the desktop (and the Resume card); the workspace starts below it. */}
+				<TopBar />
+				{/* The Display window's content while it covers the whole page, the Dock and the top bar included (phones: rotated, full screen). */}
+				<Display />
 			</div>
-			<Panel />
+			{/* The system apps' content (portals into their windows: sysapps.ts). */}
+			<Apps />
 			<Launchpad />
+			{/* While the shortcut prefix is armed (keys.ts): what each key does. */}
+			<KeysHud />
 			<PasteDialog />
 			<Confirm />
 			<Toast />
@@ -78,16 +81,16 @@ export function App() {
  * shrinks the layout viewport itself; elsewhere (iOS, older Chrome) follow
  * the visual viewport.
  *
- * And keep window 0's terminal at its bottom when it gets shorter (the
+ * And keep the console's terminal at its bottom when it gets shorter (the
  * keyboard, the key bar): bottom.ts, set up here at mount, before boot.ts
- * makes wterm, and run synchronously in the viewport events. windows.ts
- * does the same for the other windows.
+ * makes wterm, and run synchronously in the viewport events. wterms.ts
+ * does the same for the other terminals.
  */
 function useViewport(app: RefObject<HTMLDivElement | null>) {
 	useEffect(() => {
 		const el = app.current!, bottom = trackBottom(document.getElementById("term")!), vv = visualViewport;
 		const apply = () => {
-			// The on-screen keyboard is up (not a pinch zoom, which also shrinks the visual viewport): style.css hides the status line.
+			// The on-screen keyboard is up (not a pinch zoom, which also shrinks the visual viewport): style.css hides the top bar and the Dock.
 			document.documentElement.classList.toggle("kb", !!vv && Math.abs(vv.scale - 1) <= 0.01 && vv.height < document.documentElement.clientHeight - 120);
 			if (!vv || Math.abs(vv.scale - 1) > 0.01) { el.style.height = ""; el.style.top = ""; }
 			else {
@@ -133,7 +136,7 @@ function useKeyBar(mobile: boolean) {
 			const h = visualViewport?.height ?? innerHeight;
 			if (innerWidth !== tallestW) { tallest = 0; tallestW = innerWidth; }
 			tallest = Math.max(tallest, h);
-			const on = h < tallest - 120 && !!document.activeElement?.closest("#terms");
+			const on = h < tallest - 120 && terminalHasFocus(); // a terminal itself, never wland's input sink
 			if (ui$().get().keysOn !== on) ui$().set({ keysOn: on });
 		};
 		const later = () => setTimeout(update, 0); // after focus lands elsewhere
@@ -187,7 +190,7 @@ function usePinchFont(mobile: boolean) {
 		const startPinch = (e: TouchEvent) => {
 			// Not over the guest's display or its touch controls (a d-pad and a button held at once).
 			const onDisplay = [...e.touches].some((t) => !!(t.target as Element | null)?.closest?.("#fb-layer"));
-			pinch = { d: span(e.touches), size: ui$().get().fontSize, on: !onDisplay && !!(e.target as Element | null)?.closest?.("#stage") };
+			pinch = { d: span(e.touches), size: ui$().get().fontSize, on: !onDisplay && !!(e.target as Element | null)?.closest?.("#desktop") };
 		};
 		const start = (e: TouchEvent) => { if (e.touches.length === 2) startPinch(e); };
 		const move = (e: TouchEvent) => {

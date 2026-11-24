@@ -21,6 +21,10 @@
 // with the page's GL option are they fetched): the dev server answers
 // /_gl/<file> itself (serveGl()); a build emits both into
 // /assets/virgl-<sha256 prefix>/ (virgl.mjs finds virgl.wasm next to itself).
+// The guest Vulkan renderer's translator (kwvk-naga.wasm, only with the
+// page's Vulkan option, on the guest's first Vulkan instance) the same way:
+// /_vk/kwvk-naga.wasm in dev (serveGl()), /assets/kwvk-naga-<sha256
+// prefix>.wasm in a build.
 //
 // The images: the dev server answers /distros/<name>.erofs itself
 // (serveDistros(), revalidated: a local image is rebuilt in place); a build
@@ -37,10 +41,15 @@
 // running dev server are left alone. Build only: a dev server still takes
 // wland from node_modules.
 //
+// /licenses.md: the repository's THIRD-PARTY.md, then each package the
+// page's bundle carries with its license text (unkernel:licenses). The dev
+// server answers it with THIRD-PARTY.md alone.
+//
 // Runtime settings (environment variables of the built Node server):
 //   PORT, HOST (NITRO_PORT, NITRO_HOST)  where it listens (default: port 3000, all interfaces)
 import { execFileSync } from "node:child_process";
-import { createReadStream, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { copyFile, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -48,8 +57,10 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 import { nitro } from "nitro/vite";
-import { GL_FILES, baseSplit, pageSource, rescanImages, servedName, splitBase, type PageImage } from "./scripts/kernel.ts";
+import { GL_FILES, VK_FILE, baseSplit, pageSource, rescanImages, servedName, splitBase, type PageImage } from "./scripts/kernel.ts";
 import { IMMUTABLE, distroReply } from "./server/range.ts";
+
+const require = createRequire(import.meta.url);
 
 const git = (...args: string[]) => {
 	try { return execFileSync("git", args, { cwd: import.meta.dirname, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
@@ -70,6 +81,42 @@ async function buildInfo(dev: boolean) {
 		commit: commit || process.env.VERCEL_GIT_COMMIT_SHA || "",
 		date,
 	};
+}
+
+/** Where Vite lists the client's bundled packages (build.license), replaced by licenses.md. */
+const BUNDLED_LICENSES = ".vite/license.json";
+
+/** A package in Vite's build.license list. */
+type BundledPackage = { name: string; version: string; identifier?: string; text?: string };
+
+/**
+ * Packages the page carries that Vite's list misses: it follows the JS
+ * module graph, and src/style.css's @import of the fonts is not in it.
+ */
+const CSS_PACKAGES = ["@fontsource-variable/geist", "@fontsource-variable/geist-mono"];
+
+/**
+ * /licenses.md: THIRD-PARTY.md (its relative links made links into the
+ * repository), then `bundled` and CSS_PACKAGES, each with its license text.
+ */
+function licenses(bundled: BundledPackage[]): string {
+	const repo = "https://github.com/pithings/unkernel/blob/main/"; // src/config.ts REPO
+	const notice = readFileSync(path.join(import.meta.dirname, "../THIRD-PARTY.md"), "utf8")
+		.replace(/^<!--.*-->\n/gm, "")
+		.replace(/\]\((?![a-z]+:)([^)]+)\)/g, (_, p: string) => `](${repo}${p})`);
+	if (!bundled.length) return notice; // the dev server
+	const all = new Map(bundled.map((p) => [p.name, p]));
+	for (const name of CSS_PACKAGES) {
+		if (all.has(name)) continue;
+		const dir = path.dirname(require.resolve(`${name}/package.json`));
+		const pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as { version: string; license?: string };
+		const file = ["LICENSE", "LICENSE.md", "OFL.txt"].map((f) => path.join(dir, f)).find((f) => existsSync(f));
+		if (!file) throw new Error(`[licenses] ${name} has no license file`);
+		all.set(name, { name, version: pkg.version, identifier: pkg.license, text: readFileSync(file, "utf8").trim() });
+	}
+	const packages = [...all.values()].sort((a, b) => a.name.localeCompare(b.name)).map((p) =>
+		`### ${p.name} ${p.version}${p.identifier ? ` (${p.identifier})` : ""}\n\n${p.text ? `\`\`\`\n${p.text.replaceAll("```", "'''")}\n\`\`\`` : "No license text in the package."}\n`);
+	return `${notice}\n## The page's packages\n\n${packages.join("\n")}`;
 }
 
 /** The build output's directories and preset (Nitro's), known once Nitro has compiled. */
@@ -124,8 +171,18 @@ export default defineConfig({
 		// there must not reload an open dev page, which would end its VM.
 		watch: { ignored: ["**/.output/**", "**/.vercel/**", "**/kernel/release/**", "**/kernel/page/**"] },
 	},
-	// profile.html: the defaults profiler (src/profile.ts), a page of its own.
-	build: { target: "esnext", rollupOptions: { input: { main: path.join(import.meta.dirname, "index.html"), profile: path.join(import.meta.dirname, "profile.html") } } },
+	build: { target: "esnext" },
+	// profile.html: the defaults profiler (src/profile.ts), and smp-probe.html:
+	// the SMP slowdown probe (src/smp-probe.ts), pages of their own. Nitro
+	// builds the client environment from index.html alone (its renderer
+	// template), so they are a second client environment, which it builds
+	// into the same public directory.
+	// The page's bundled packages, as JSON for unkernel:licenses (client only:
+	// the pages' bundles are a part of it).
+	environments: {
+		client: { build: { license: { fileName: BUNDLED_LICENSES } } },
+		pages: { consumer: "client", build: { rollupOptions: { input: { profile: path.join(import.meta.dirname, "profile.html"), "smp-probe": path.join(import.meta.dirname, "smp-probe.html") } } } },
+	},
 	// The SDK's worker mode (?worker=1): js/web/worker.ts starts a module worker.
 	worker: { format: "es" },
 	plugins: [
@@ -141,7 +198,7 @@ export default defineConfig({
 				// compresses inside): Nitro's dev handler would answer public/ files
 				// compressed and in full.
 				server.middlewares.use(serveDistros);
-				// /_gl/virgl.mjs and virgl.wasm as they are (Vite's transform would rewrite the module).
+				// /_gl/virgl.mjs and virgl.wasm as they are (Vite's transform would rewrite the module), and /_vk/kwvk-naga.wasm.
 				server.middlewares.use(serveGl);
 				// A new base bundle (kernel/build.sh base): split it again. A rebuilt
 				// image (kernel/build.sh distro): the list is read again on the next
@@ -169,8 +226,9 @@ export default defineConfig({
 			},
 			// src/sdk.ts's kernelUrl and kernelSmpUrl (the base bundle's UP and SMP
 			// kernels: /@fs/ files in dev, hashed assets in a build; the SMP one
-			// null without an SMP patch) and glUrl (virgl.mjs, or null without the
-			// GL renderer), and src/config.ts's distros.
+			// null without an SMP patch), glUrl (virgl.mjs, or null without the
+			// GL renderer) and vkShaderUrl (kwvk-naga.wasm, or null without it),
+			// and src/config.ts's distros.
 			resolveId(id) {
 				return id === "virtual:unkernel-kernel" ? "\0virtual:unkernel-kernel" : null;
 			},
@@ -200,12 +258,19 @@ export default defineConfig({
 					this.emitFile({ type: "asset", fileName: `${dir}/${GL_FILES[1]}`, source: await readFile(s.gl.wasm) });
 					gl = `new URL(import.meta.ROLLUP_FILE_URL_${ref}, import.meta.url)`;
 				}
+				let vk = "null";
+				if (s.vk && dev) vk = `new URL("/_vk/${VK_FILE}", globalThis.location.href)`;
+				else if (s.vk) {
+					const ref = this.emitFile({ type: "asset", fileName: `assets/kwvk-naga-${s.vk.sha256.slice(0, 16)}.wasm`, source: await readFile(s.vk.wasm) });
+					vk = `new URL(import.meta.ROLLUP_FILE_URL_${ref}, import.meta.url)`;
+				}
 				const images = dev ? await (devImages ??= rescanImages(s)) : s.distros;
 				const distros = images.map(({ name, url, size, imageId }) => ({ name, url, size, ...(imageId ? { imageId } : {}) }));
 				return [
 					`export const kernelUrl = ${up};`,
 					`export const kernelSmpUrl = ${smp};`,
 					`export const glUrl = ${gl};`,
+					`export const vkShaderUrl = ${vk};`,
 					`export const distros = ${JSON.stringify(distros)};`,
 				].join("\n");
 			},
@@ -226,18 +291,43 @@ export default defineConfig({
 		},
 		{
 			// Nitro's dev renderer answers every page with index.html: profile.html
-			// here (a build emits it as a page of its own, build.rollupOptions above).
+			// and smp-probe.html here (a build emits them as pages of their own,
+			// build.rollupOptions above).
 			name: "unkernel:profile-page",
 			configureServer(server) {
 				server.middlewares.use((req, res, next) => {
-					if ((req.url ?? "").split("?")[0] !== "/profile.html") return next();
-					readFile(path.join(import.meta.dirname, "profile.html"), "utf8")
-						.then((html) => server.transformIndexHtml("/profile.html", html))
+					const url = (req.url ?? "").split("?")[0]!;
+					if (url !== "/profile.html" && url !== "/smp-probe.html") return next();
+					readFile(path.join(import.meta.dirname, url.slice(1)), "utf8")
+						.then((html) => server.transformIndexHtml(url, html))
 						.then((html) => {
 							res.setHeader("content-type", "text/html; charset=utf-8");
 							res.end(html);
 						}, next);
 				});
+			},
+		},
+		{
+			// /licenses.md (licenses() below): the dev server's, and a build's
+			// in place of Vite's JSON list of the client's bundled packages.
+			name: "unkernel:licenses",
+			configureServer(server) {
+				server.middlewares.use((req, res, next) => {
+					if ((req.url ?? "").split("?")[0] !== "/licenses.md") return next();
+					res.setHeader("content-type", "text/markdown; charset=utf-8");
+					res.setHeader("cache-control", "no-cache");
+					res.end(licenses([]));
+				});
+			},
+			generateBundle: {
+				order: "post", // after vite:license
+				handler(_, bundle) {
+					if (this.environment.name !== "client") return;
+					const list = bundle[BUNDLED_LICENSES];
+					if (list?.type !== "asset") throw new Error(`[licenses] Vite gave no ${BUNDLED_LICENSES}`);
+					delete bundle[BUNDLED_LICENSES];
+					this.emitFile({ type: "asset", fileName: "licenses.md", source: licenses(JSON.parse(String(list.source)) as BundledPackage[]) });
+				},
 			},
 		},
 		...(wlandPkg ? [wlandPkgPlugin(wlandPkg)] : []),
@@ -275,6 +365,8 @@ export default defineConfig({
 				},
 				// Checked for updates on every load (src/sw.ts); not cached by the CDN.
 				"/vm-sw.js": { headers: { "cache-control": "no-cache" } },
+				// The preview's WebSocket shim, which vm-sw.js puts into guest pages: in step with the worker.
+				"/vm-ws.js": { headers: { "cache-control": "no-cache" } },
 				// The images, loadable by the cross-origin-isolated page. Their
 				// Cache-Control comes from server/range.ts on Node, and on Vercel from
 				// the hit-phase route unkernel:distro-images adds (a found file only,
@@ -338,18 +430,21 @@ async function vercelImmutable(file: string): Promise<void> {
  * The dev server's /_gl/virgl.mjs and /_gl/virgl.wasm: the page's GL
  * renderer files (scripts/kernel.ts), as they are on disk (gl/wasm/build.sh
  * rewrites them in place, so revalidated: no-cache), with the isolation
- * headers. 404 without a GL renderer.
+ * headers. 404 without a GL renderer. Likewise /_vk/kwvk-naga.wasm, the
+ * Vulkan renderer's translator (vk/naga/build.sh).
  */
 function serveGl(req: IncomingMessage, res: ServerResponse, next: () => void): void {
 	const url = (req.url ?? "").split("?")[0]!;
-	if (!url.startsWith("/_gl/")) return next();
+	const vk = url.startsWith("/_vk/");
+	if (!vk && !url.startsWith("/_gl/")) return next();
 	const name = url.slice("/_gl/".length);
 	void pageSource(true).then(async (s) => {
-		const file = !s.gl ? null : name === GL_FILES[0] ? s.gl.mjs : name === GL_FILES[1] ? s.gl.wasm : null;
+		const file = vk ? (s.vk && name === VK_FILE ? s.vk.wasm : null)
+			: !s.gl ? null : name === GL_FILES[0] ? s.gl.mjs : name === GL_FILES[1] ? s.gl.wasm : null;
 		const isolation = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
 		if (!file) {
 			res.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...isolation });
-			return void res.end(`no ${name} on this dev server (${s.glWhy})\n`);
+			return void res.end(`no ${name} on this dev server (${vk ? s.vkWhy : s.glWhy})\n`);
 		}
 		const st = await stat(file);
 		const etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;

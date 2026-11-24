@@ -6,13 +6,13 @@
 // window system. The pieces (.agents/gl.md):
 //
 //   guest: GL program -> Mesa virpipe -> /tmp/.virgl_test
-//          -> /usr/lib/kw/vtest-bridge (the forwarder, in the base's kw layer)
+//          -> kwbox vtest (the forwarder, in the base's kw layer)
 //          -> AF_VSOCK, host CID 2, port GL_PORT (1019)
 //   host:  this thread's VsockHost -> StreamHost (gl-stream.ts) -> renderer
 //          (Module.virgl.Renderer of virgl.mjs, gl/wasm/post.js) -> WebGL2
 //
 // GlHost serves vsock port 1019 and starts the guest's forwarder through
-// kwtty as root (`vtest-bridge bridge --link vsock:2:1019 --daemon`, which
+// kwtty as root (`kwbox vtest bridge --link vsock:2:1019 --daemon`, which
 // exits at once when one already runs, as after a restore) right after the
 // boot. The renderer (GlLoader: the module, fetched only with `gl`, and a
 // WebGL2 context on an OffscreenCanvas, 1x1: every frame goes to the
@@ -47,13 +47,13 @@
 import { PtyError } from "./tty.ts";
 import { StreamHost, type StreamHostStats, type VirglTotals, type VtestRenderer } from "./gl-stream.ts";
 import { GpuRenderer, type GpuRendererCore, type GpuRendererStats, type VirglGpuApi } from "./gl-gpu.ts";
-import { guestRun } from "./mounts.ts";
+import { guestRun, KWBOX, noKwbox } from "./mounts.ts";
 import type { Vsock, VsockConnection, VsockListener } from "./vsock.ts";
 
 /** The vsock port the host's renderer listens on (the guest's forwarder connects to CID 2 there). */
 export const GL_PORT = 1019;
-/** The guest's forwarder (gl/bridge/vtest-bridge.c, stream link only), in the base's kw layer. */
-export const GL_FORWARDER = "/usr/lib/kw/vtest-bridge";
+/** The guest's forwarder (gl/bridge/vtest-bridge.c, stream link only) as a command: a tool of the base's kwbox. */
+export const GL_FORWARDER: readonly string[] = [KWBOX, "vtest"];
 
 const FORWARDER_TIMEOUT_MS = 120000;
 const LINK_TIMEOUT_MS = 30000;
@@ -73,8 +73,8 @@ export interface GlOptions {
 	renderer?: VtestRenderer;
 	/**
 	 * Start the guest's forwarder (GL_FORWARDER) through kwtty once the
-	 * renderer is up. Default true; false: start it yourself (`vtest-bridge
-	 * bridge --link vsock:2:1019 --daemon`).
+	 * renderer is up. Default true; false: start it yourself (`kwbox
+	 * vtest bridge --link vsock:2:1019 --daemon`).
 	 */
 	forwarder?: boolean;
 	/**
@@ -267,11 +267,11 @@ export class GlHost {
 	async #startForwarder(): Promise<void> {
 		let r;
 		try {
-			r = await guestRun(this.#vsock!, GL_FORWARDER, ["bridge", "--link", `vsock:2:${GL_PORT}`, "--daemon"], FORWARDER_TIMEOUT_MS);
+			r = await guestRun(this.#vsock!, GL_FORWARDER[0]!, [...GL_FORWARDER.slice(1), "bridge", "--link", `vsock:2:${GL_PORT}`, "--daemon"], FORWARDER_TIMEOUT_MS);
 		} catch (e) {
 			const msg = (e as Error)?.message ?? String(e);
-			if (e instanceof PtyError && e.code === "EREMOTE" && /No such file/.test(msg))
-				throw new Error(`the guest has no ${GL_FORWARDER} (a kernel bundle from before guest GL); start a forwarder yourself`, { cause: e });
+			if (e instanceof PtyError && e.code === "EREMOTE" && noKwbox(msg))
+				throw new Error(`the guest has no ${KWBOX} (a base from before kwbox); start a forwarder yourself`, { cause: e });
 			throw new Error(`cannot start the guest's forwarder: ${msg}`, { cause: e });
 		}
 		if (r.exitCode !== 0)

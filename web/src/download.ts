@@ -117,8 +117,6 @@ async function openCache(): Promise<Cache | null> {
 	try { return typeof caches === "undefined" ? null : await caches.open(CACHE_NAME); } catch { return null; }
 }
 
-export const fmtMiB = (n: number) => `${(n / 1048576).toFixed(1)} MiB`;
-
 /**
  * The file's bytes, from the browser cache when a copy there matches its
  * SHA-256, else downloaded over Wisp, checked and cached. Rejects on a
@@ -184,8 +182,8 @@ size=$(stat -c %s "$1.part")
 if [ "$size" != "$2" ]; then rm -f "$1.part"; echo "got $size of $2 bytes" >&2; exit 1; fi
 mv "$1.part" "$1"`;
 
-/** Write `bytes` to `path` in the guest (relative to ~, or absolute), atomically. */
-export async function pushFile(vm: KernelHandle, path: string, bytes: Uint8Array): Promise<void> {
-	const r = await vm.exec("/bin/sh", ["-c", PUSH_SH, "sh", path.replace(/^~\//, ""), String(bytes.length)], { input: bytes });
+/** Write `bytes` to `path` in the guest (relative to ~, or absolute), atomically; `signal` stops it (a .part file may stay). */
+export async function pushFile(vm: KernelHandle, path: string, bytes: Uint8Array, signal?: AbortSignal): Promise<void> {
+	const r = await vm.exec("/bin/sh", ["-c", PUSH_SH, "sh", path.replace(/^~\//, ""), String(bytes.length)], { input: bytes, signal });
 	if (r.exitCode !== 0) throw new Error(`writing ${path} failed: ${(r.stderr || r.stdout).trim() || `exit ${r.exitCode}`}`);
 }

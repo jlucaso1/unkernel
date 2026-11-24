@@ -78,6 +78,8 @@ export interface DataDiskSpec extends SpecCommon {
 	name?: string;
 	version?: string;
 	snapshotLimit?: number;
+	/** The disk's size in bytes: a new or smaller saved disk is made or grown this large, never shrunk (openDataDisk()'s `size`). */
+	size?: number;
 }
 
 export type DiskSpec = FileDiskSpec | HttpDiskSpec | DataDiskSpec;

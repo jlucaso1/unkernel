@@ -19,6 +19,18 @@
 //                     stale, and an indexed draw reloads a stale twin by
 //                     reading the buffer back. vrend's calls reach these
 //                     through the kw_ names (epoxy/gl.h).
+//   uniform sizes     WebGL refuses a draw whose uniform buffer range is
+//                     smaller than the block it backs (UNIFORM_BLOCK_DATA_SIZE,
+//                     GL_INVALID_OPERATION "a uniform buffer that is too
+//                     small"), which desktop drivers let pass, and vrend binds
+//                     the guest's range as it is. An std140 block's size is a
+//                     multiple of 16, so a range short of only its trailing
+//                     padding is a common bug (SuperTuxKart 1.4's Matrices
+//                     block: 592 bytes, its buffer 584): a uniform buffer range
+//                     is rounded up to 16 bytes, and every buffer vrend
+//                     allocates (no data) to 16 bytes so that the range fits
+//                     (offsets are aligned to UNIFORM_BUFFER_OFFSET_ALIGNMENT,
+//                     a multiple of 16).
 //   buffer maps       glMapBufferRange, glUnmapBuffer, glFlushMappedBufferRange:
 //                     WebGL has no buffer mapping. A map is a copy in module
 //                     memory, filled by getBufferSubData when the range must be
@@ -218,6 +230,7 @@ addToLibrary({
   // an element buffer too.
   kw_glBufferData__deps: ['$kwgl', 'glBufferData'],
   kw_glBufferData: (target, size, data, usage) => {
+    if (!data) size = (size + 15) & ~15; // room for a padded uniform range (uniform sizes)
     const { buf, twin } = kwgl.reach(target);
     if (twin && target === kwgl.ELEMENT)
       kwgl.withCopy(kwgl.COPY_WRITE, buf, () => _glBufferData(kwgl.COPY_WRITE, size, data, usage));
@@ -264,6 +277,14 @@ addToLibrary({
       GLctx.deleteBuffer(twin);
     }
     _glDeleteBuffers(n, buffers);
+  },
+
+  // --- uniform sizes ---
+
+  kw_glBindBufferRange__deps: ['glBindBufferRange'],
+  kw_glBindBufferRange: (target, index, buffer, offset, size) => {
+    if (target === 0x8A11 /* UNIFORM_BUFFER */) size = (size + 15) & ~15;
+    _glBindBufferRange(target, index, buffer, offset, size);
   },
 
   // transform feedback wrote to its buffers

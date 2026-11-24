@@ -1,4 +1,4 @@
-From f46ad89a5c65213bc2c0fe2250bc89963557244d Mon Sep 17 00:00:00 2001
+From c3056b2ff073ce2661180ca268258a953409cd1b Mon Sep 17 00:00:00 2001
 From: kernel-wasm <kernel-wasm@localhost>
 Date: Mon, 16 Nov 2026 20:16:04 +0000
 Subject: [PATCH] wasm: kwsnd on SMP
@@ -16,10 +16,10 @@ before its frames. The UP build is unchanged.
  1 file changed, 113 insertions(+), 9 deletions(-)
 
 diff --git a/sound/drivers/kwsnd.c b/sound/drivers/kwsnd.c
-index 50d23ec21fe..6d36e5dc10c 100644
+index d8e0be82cbb..403d3a76805 100644
 --- a/sound/drivers/kwsnd.c
 +++ b/sound/drivers/kwsnd.c
-@@ -35,6 +35,14 @@
+@@ -45,6 +45,14 @@
   * The host is told about every state change with wasm_driver_sound_event():
   * open, prepare (rate, channels, format), start, stop (drain or not) and
   * close. No import suspends.
@@ -34,7 +34,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
   */
  
  #include <linux/hrtimer.h>
-@@ -42,6 +50,7 @@
+@@ -52,6 +60,7 @@
  #include <linux/math64.h>
  #include <linux/module.h>
  #include <linux/slab.h>
@@ -42,7 +42,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
  #include <sound/core.h>
  #include <sound/pcm.h>
  #include <asm/wasm.h>
-@@ -75,8 +84,75 @@ struct kwsnd_stream {
+@@ -85,8 +94,75 @@ struct kwsnd_stream {
  	u64 tick_ns;
  	u32 burst;		/* most frames one tick hands over */
  	bool running;
@@ -118,7 +118,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
  static const struct snd_pcm_hardware kwsnd_hw = {
  	.info = SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
  		SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER,
-@@ -121,6 +197,9 @@ static enum hrtimer_restart kwsnd_tick(struct hrtimer *timer)
+@@ -131,6 +207,9 @@ static enum hrtimer_restart kwsnd_tick(struct hrtimer *timer)
  	unsigned long flags;
  
  	snd_pcm_stream_lock_irqsave(s->substream, flags);
@@ -128,7 +128,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
  	if (!s->running)
  		goto stopped;
  
-@@ -184,7 +263,10 @@ static int kwsnd_open(struct snd_pcm_substream *substream)
+@@ -217,7 +296,10 @@ static int kwsnd_open(struct snd_pcm_substream *substream)
  		return err;
  	}
  	runtime->private_data = s;
@@ -140,7 +140,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
  	return 0;
  }
  
-@@ -192,9 +274,16 @@ static int kwsnd_close(struct snd_pcm_substream *substream)
+@@ -225,9 +307,16 @@ static int kwsnd_close(struct snd_pcm_substream *substream)
  {
  	struct kwsnd_stream *s = substream->runtime->private_data;
  
@@ -157,7 +157,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
  	return 0;
  }
  
-@@ -205,13 +294,16 @@ static int kwsnd_prepare(struct snd_pcm_substream *substream)
+@@ -238,13 +327,16 @@ static int kwsnd_prepare(struct snd_pcm_substream *substream)
  	u64 period_ns = div_u64((u64)runtime->period_size * NSEC_PER_SEC,
  				runtime->rate);
  
@@ -176,7 +176,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
  	return 0;
  }
  
-@@ -231,12 +323,29 @@ static int kwsnd_trigger(struct snd_pcm_substream *substream, int cmd)
+@@ -264,12 +356,29 @@ static int kwsnd_trigger(struct snd_pcm_substream *substream, int cmd)
  		s->played = 0;
  		s->pos0 = runtime->status->hw_ptr % runtime->buffer_size;
  		s->running = true;
@@ -207,7 +207,7 @@ index 50d23ec21fe..6d36e5dc10c 100644
  		wasm_driver_sound_event(KWSND_EV_STOP,
  					runtime->state == SNDRV_PCM_STATE_DRAINING,
  					0, 0);
-@@ -273,11 +382,6 @@ static int __init kwsnd_init(void)
+@@ -306,11 +415,6 @@ static int __init kwsnd_init(void)
  		pr_info("kwsnd: no host audio\n");
  		return 0;
  	}
